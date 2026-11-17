@@ -43,6 +43,10 @@ export interface DatabaseProvider {
   schema(): Promise<TableInfo[]>;
   /** Release idle connections (lets serverless databases pause) */
   idle(): Promise<void>;
+  /** True when the template arrives ready-made (the SQL Server pool); the mission then skips migrate + seed */
+  readonly managesTemplate?: boolean;
+  /** Extra connection-string options for the app (SQL Server's TLS settings) */
+  tlsOptions?(): string;
   stop(): Promise<void>;
 }
 

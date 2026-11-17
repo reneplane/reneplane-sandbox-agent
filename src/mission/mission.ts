@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PATHS } from '../config.js';
+import { loadConfig, PATHS } from '../config.js';
+import { DockerMssql, RemoteMssql } from '../db/mssql.js';
 import { LocalMysql } from '../db/mysql.js';
 import { LocalPostgres } from '../db/postgres.js';
 import type { DatabaseConnection, DatabaseProvider } from '../db/types.js';
@@ -24,7 +25,7 @@ import { Git } from './git.js';
 import { Services } from './services.js';
 import { Terminals } from './terminal.js';
 import { runTests } from './tests.js';
-import { parseWorkspace, render, renderEnv, type Vars, type WorkspaceFile } from './workspace.js';
+import { parseWorkspace, render, renderEnv, shellCommand, type Vars, type WorkspaceFile } from './workspace.js';
 
 /**
  * One learner's attempt at one mission, on this computer.
@@ -69,6 +70,8 @@ export class Mission {
   private booted = false;
   private booting: Promise<void> | null = null;
   private runQueue: Promise<unknown> = Promise.resolve();
+  /** An IDE tab is connected to this mission (kept up to date by the manager; sent with lease heartbeats) */
+  watched = true;
 
   constructor(
     open: MissionOpen,
@@ -133,7 +136,7 @@ export class Mission {
       repo: { name: workspace.name, branch: workspace.branch },
       bootSteps: steps,
       preview: preview && this.ports[preview.service] ? { url: `http://localhost:${this.ports[preview.service]}${preview.path}` } : null,
-      database: { engine: workspace.database.engine, location: 'local', label: this.databaseLabel() },
+      database: { engine: workspace.database.engine, location: workspace.database.engine === 'sqlserver' ? 'remote' : 'local', label: this.databaseLabel() },
     };
   }
 
@@ -230,7 +233,7 @@ export class Mission {
     }
     const digest = hash.digest('hex');
     if (setup.inputs.length && this.state.setupHashes[setup.name] === digest) return;
-    const result = await runCommand(render(setup.run, this.vars()), {
+    const result = await runCommand(shellCommand(render(setup.run, this.vars())), {
       cwd: join(this.repoDir, setup.cwd),
       env: this.env(),
       onLine: (line) => this.log({ source: 'runner', level: 'info', message: line }),
@@ -245,10 +248,16 @@ export class Mission {
     const db = this.db!;
     const workspace = this.workspace!;
     const rebuild = !this.state.templateReady;
+    if (db.managesTemplate) {
+      // The template arrived with the database (SQL Server pool): nothing to migrate or seed here
+      await db.prepare(rebuild);
+      if (rebuild) this.updateState({ templateReady: true });
+      return;
+    }
     const { devExists } = await db.prepare(rebuild);
     if (rebuild) {
       const template = db.templateConnection();
-      const result = await runCommand(render(workspace.migrate.run, this.vars(template)), {
+      const result = await runCommand(shellCommand(render(workspace.migrate.run, this.vars(template))), {
         cwd: join(this.repoDir, workspace.migrate.cwd),
         env: this.env(template),
         onLine: (line) => this.log({ source: 'database', level: 'info', message: line }),
@@ -272,7 +281,7 @@ export class Mission {
     const vars = this.vars();
     await this.services.start(
       name,
-      render(service.run, vars),
+      shellCommand(render(service.run, vars)),
       join(this.repoDir, service.cwd),
       { ...this.env(), ...renderEnv(service.env, vars) },
       `http://127.0.0.1:${port}${service.ready}`,
@@ -283,6 +292,20 @@ export class Mission {
     const { engine, name } = this.workspace!.database;
     if (engine === 'postgres') return new LocalPostgres(join(this.dir, 'db', 'postgres'), name, this.state.secrets);
     if (engine === 'mysql') return new LocalMysql(join(this.dir, 'db', 'mysql'), name, this.state.secrets);
+    if (engine === 'sqlserver') {
+      const template = this.workspace!.database.template;
+      if (!template) throw new AgentError('database_unavailable', 'This codebank has no SQL Server template script');
+      if (this.options.dev && process.env.RENEPLANE_MSSQL === 'docker') {
+        return new DockerMssql(this.attemptId, name, () => this.git!.show(this.state.open.codebank.ref, template), this.state.secrets);
+      }
+      const { attemptId, missionId, variantId, codebank } = this.state.open;
+      return new RemoteMssql(
+        process.env.RENEPLANE_POOL_URL ?? 'https://reneplane-mssql-pool.reneplane.workers.dev',
+        () => loadConfig().deviceToken,
+        { attemptId, missionId, variantId, codebank },
+        () => this.watched,
+      );
+    }
     throw new AgentError('database_unavailable', `${engine} isn't supported by this version of Reneplane Local yet`);
   }
 
@@ -312,6 +335,7 @@ export class Mission {
         'db.password': db.password,
         'db.name': db.name,
         'db.testName': db.testName,
+        'db.tls': this.db?.tlsOptions?.() ?? '',
       });
     }
     return vars;
@@ -428,7 +452,7 @@ export class Mission {
 
   async migrate(): Promise<string[]> {
     const workspace = this.workspace!;
-    const result = await runCommand(render(workspace.migrate.run, this.vars()), {
+    const result = await runCommand(shellCommand(render(workspace.migrate.run, this.vars())), {
       cwd: join(this.repoDir, workspace.migrate.cwd),
       env: this.env(),
       onLine: (line) => this.log({ source: 'database', level: 'info', message: line }),

@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { XMLParser } from 'fast-xml-parser';
 import type { RunResult, TestCheck } from '../protocol.js';
 import { runCommand, type Env } from '../util/process.js';
-import { render, type Vars, type WorkspaceFile } from './workspace.js';
+import { render, shellCommand, type Vars, type WorkspaceFile } from './workspace.js';
 
 /**
  * Run the visible tests and turn their JUnit XML into the IDE's RunResult. One parser covers Vitest,
@@ -32,14 +32,17 @@ export async function runTests(options: {
   let buildOk = true;
 
   for (const step of options.steps) {
+    // Reports inside the repo (e.g. Surefire's target/surefire-reports) are relative to the repo root.
+    // Clear them first, so a build that fails can't be read as the previous run's results.
+    const report = resolve(options.repo, render(step.junit, vars));
+    rmSync(report, { recursive: true, force: true });
     options.onLine(`\u001b[2m$ ${render(step.run, { ...vars, 'db.password': '••••' })}\u001b[0m`);
-    const result = await runCommand(render(step.run, vars), {
+    const result = await runCommand(shellCommand(render(step.run, vars)), {
       cwd: join(options.repo, step.cwd),
       env: options.env,
       onLine: options.onLine,
       timeoutMs: 15 * 60_000,
     });
-    const report = render(step.junit, vars);
     const found = readJunit(report, step.layer, checks.length);
     if (!found.length && result.code !== 0) {
       // No report and a failure exit: it didn't compile or couldn't start, so no test ran

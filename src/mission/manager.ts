@@ -80,6 +80,7 @@ export class MissionManager {
   private checkIdle(): void {
     const mission = this.active;
     const watched = mission && [...this.clients].some((client) => client.attemptId === mission.attemptId);
+    if (mission) mission.watched = Boolean(watched);
     if (watched || !mission) {
       if (this.idleTimer) clearTimeout(this.idleTimer);
       this.idleTimer = null;

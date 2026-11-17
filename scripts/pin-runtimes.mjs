@@ -88,7 +88,7 @@ async function git() {
 const UV = '0.13.9';
 const JAVA = { feature: 21, release: 'jdk-21.0.13+9' };
 const MYSQL = '8.4.13';
-const DOTNET_CHANNEL = '8.0';
+const DOTNET_CHANNEL = '10.0';
 
 async function uv() {
   const name = {

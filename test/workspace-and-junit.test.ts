@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readJunit } from '../src/mission/tests.js';
-import { parseWorkspace, render } from '../src/mission/workspace.js';
+import { parseWorkspace, render, shellCommand } from '../src/mission/workspace.js';
 
 describe('workspace.yaml', () => {
   const yaml = `
@@ -29,6 +29,13 @@ env:
 
   it('rejects an invalid file with the path of the problem', () => {
     expect(() => parseWorkspace(yaml.replace('engine: postgres', 'engine: oracle'))).toThrow(/database\.engine/);
+  });
+
+  it('runs ./scripts through cmd.exe on Windows', () => {
+    expect(shellCommand('./mvnw -q test', 'win32')).toBe('.\\mvnw -q test');
+    expect(shellCommand('cd backend && ./mvnw test', 'win32')).toBe('cd backend && .\\mvnw test');
+    expect(shellCommand('npm run dev -- --port 5173', 'win32')).toBe('npm run dev -- --port 5173');
+    expect(shellCommand('./mvnw test', 'linux')).toBe('./mvnw test');
   });
 
   it('fills variables and refuses unknown ones', () => {

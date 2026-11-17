@@ -58,6 +58,8 @@ export const WorkspaceFile = z.object({
     name: z.string().regex(/^[a-z][a-z0-9_]{0,30}$/),
     /** SQL file loaded into the template after migrations, per engine */
     seed: z.string().optional(),
+    /** SQL Server only: the whole template (migrations as SQL + seed), which the database pool loads */
+    template: z.string().optional(),
   }),
   setup: z.array(Command).default([]),
   migrate: z.object({
@@ -91,6 +93,14 @@ export function render(template: string, vars: Vars): string {
     if (value === undefined) throw new Error(`workspace.yaml uses an unknown variable {{${name}}}`);
     return String(value);
   });
+}
+
+/**
+ * Commands run through the shell: cmd.exe on Windows, which can't run "./mvnw". Rewrite "./" at the
+ * start of a command to ".\" there, so one workspace.yaml works everywhere (cmd finds mvnw.cmd).
+ */
+export function shellCommand(command: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === 'win32' ? command.replace(/(^|[\s;&|(])\.\//g, '$1.\\') : command;
 }
 
 export function renderEnv(env: Record<string, string>, vars: Vars): Record<string, string> {
