@@ -461,7 +461,8 @@ export class Mission {
     });
     if (result.code !== 0) throw new AgentError('failed', `The migration failed:\n${result.output.slice(-12).join('\n')}`);
     const pattern = new RegExp(workspace.migrate.applied, 'gm');
-    const applied = [...result.output.join('\n').matchAll(pattern)].map((match) => match[1] ?? match[0]);
+    // Some tools print a migration's name more than once (EF Core)
+    const applied = [...new Set([...result.output.join('\n').matchAll(pattern)].map((match) => match[1] ?? match[0]))];
     applied.forEach((name) => this.log({ source: 'database', level: 'info', message: `migration applied: ${name}` }));
     return applied;
   }
