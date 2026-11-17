@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: The bundle starts and reports its version
+        run: node dist/launch.mjs version
+      - name: The agent listens on 127.0.0.1 only and refuses other websites
+        shell: bash
+        env:
+          RENEPLANE_HOME: ${{ runner.temp }}/reneplane-home
+        run: |
+          node dist/launch.mjs serve &
+          for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:47811/health && break; sleep 1; done
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.example' http://127.0.0.1:47811/health)
+          test "$code" = 403 || (echo "expected 403 for a foreign origin, got $code" && exit 1)
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://workspace.reneplane.com' -H 'Host: attacker.example:47811' http://127.0.0.1:47811/health)
+          test "$code" = 403 || (echo "expected 403 for a foreign Host, got $code" && exit 1)
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://workspace.reneplane.com' http://127.0.0.1:47811/health)
+          test "$code" = 200 || (echo "expected 200 for the workspace, got $code" && exit 1)
+          node dist/launch.mjs stop

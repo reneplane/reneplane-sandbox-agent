@@ -30,6 +30,8 @@ export interface ServerOptions extends MissionOptions {
 
 export interface RunningServer {
   port: number;
+  /** A mission's programs are running: don't restart under it */
+  busy(): boolean;
   close(): Promise<void>;
 }
 
@@ -108,6 +110,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
 
   return {
     port,
+    busy: () => manager.current()?.isRunning ?? false,
     close: async () => {
       for (const client of sockets.clients) client.close(1001, 'Agent stopping');
       await manager.shutdown();

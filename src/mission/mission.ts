@@ -84,6 +84,11 @@ export class Mission {
     );
   }
 
+  /** Its programs are running (not stopped for idleness) */
+  get isRunning(): boolean {
+    return this.booted || this.booting !== null;
+  }
+
   get attemptId(): string {
     return this.state.open.attemptId;
   }

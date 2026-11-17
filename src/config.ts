@@ -54,6 +54,8 @@ export interface AgentConfig {
   allowPreviewOrigins: boolean;
   /** Signed by get.reneplane.com when the install token was redeemed; sent to the pool and grader */
   deviceToken: string | null;
+  /** Install token still to be redeemed for a device token (the install couldn't reach get.reneplane.com) */
+  pendingRedeem: { token: string; getUrl: string } | null;
   /** Start at login (default) or only when asked */
   startAtLogin: boolean;
 }
@@ -65,6 +67,7 @@ function defaults(): AgentConfig {
     pendingPairings: [],
     allowPreviewOrigins: false,
     deviceToken: null,
+    pendingRedeem: null,
     startAtLogin: true,
   };
 }

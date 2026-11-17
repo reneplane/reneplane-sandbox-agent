@@ -1,0 +1,27 @@
+# get.reneplane.com: the Reneplane Local installer service
+# Deploy: npx wrangler deploy   (from this folder)
+# Secret: npx wrangler secret put DEVICE_TOKEN_SECRET   (shared with the SQL Server pool and the grader)
+name = "reneplane-get"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+[vars]
+RELEASE_URL = "https://github.com/reneplane/reneplane-sandbox-agent/releases/latest/download"
+ALLOWED_ORIGINS = "https://workspace.reneplane.com,http://localhost:5175"
+
+[[kv_namespaces]]
+binding = "TOKENS"
+id = "705b769246684a59a1282b11b9415513"
+
+# 30 requests a minute per IP across install-token, script and device endpoints
+[[ratelimits]]
+name = "INSTALL_LIMIT"
+namespace_id = "1001"
+simple = { limit = 30, period = 60 }
+
+# The install scripts are imported as text
+[[rules]]
+type = "Text"
+globs = ["**/*.ps1", "**/*.sh"]
+fallthrough = true

@@ -1,0 +1,99 @@
+name: Release
+
+# Push a tag like v0.2.0. Each platform is built on its own runner (node-pty's binary is per platform),
+# then one release gets every archive and a SHA256SUMS file the installers and the updater check.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+          - os: ubuntu-latest
+          - os: macos-latest
+          - os: macos-15-intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Build
+        shell: bash
+        run: AGENT_VERSION="${GITHUB_REF_NAME#v}" npm run build
+      - run: node scripts/package.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}
+          path: release/reneplane-local-*
+          retention-days: 3
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd artifacts
+          cat *.sha256 > SHA256SUMS
+          rm *.sha256
+          cat SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" --title "Reneplane Local ${GITHUB_REF_NAME#v}" --generate-notes
+
+  # The real one-line install, from the live installer service, on fresh machines
+  smoke:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      GET_URL: https://reneplane-get.reneplane.workers.dev
+    steps:
+      - name: Get an install token (as the workspace would)
+        shell: bash
+        run: |
+          token=$(curl -fsS -X POST -H 'Origin: https://workspace.reneplane.com' "$GET_URL/install-tokens" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          echo "TOKEN=$token" >> "$GITHUB_ENV"
+      - name: Install (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: irm "$env:GET_URL/local.ps1?t=$env:TOKEN" | iex
+      - name: Install (macOS, Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: curl -fsSL "$GET_URL/local?t=$TOKEN" | sh
+      - name: The agent is running, on 127.0.0.1, for the workspace only
+        shell: bash
+        run: |
+          for i in $(seq 1 30); do curl -s -o /dev/null -H 'Origin: https://workspace.reneplane.com' http://127.0.0.1:47811/health && break; sleep 2; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://workspace.reneplane.com' http://127.0.0.1:47811/health)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.example' http://127.0.0.1:47811/health)" = 403
+          node=$HOME/.reneplane/bin/node; [ -x "$node" ] || node=$USERPROFILE/.reneplane/bin/node.exe
+          "$node" "$HOME/.reneplane/bin/launch.mjs" status 2>/dev/null || "$node" "$USERPROFILE/.reneplane/bin/launch.mjs" status
+          grep -q '"deviceToken": "v1\.' "$HOME/.reneplane/config.json" 2>/dev/null || grep -q '"deviceToken": "v1\.' "$USERPROFILE/.reneplane/config.json"
+      - name: Uninstall
+        shell: bash
+        run: |
+          node=$HOME/.reneplane/bin/node; launch=$HOME/.reneplane/bin/launch.mjs
+          [ -x "$node" ] || { node=$USERPROFILE/.reneplane/bin/node.exe; launch=$USERPROFILE/.reneplane/bin/launch.mjs; }
+          "$node" "$launch" uninstall --all
