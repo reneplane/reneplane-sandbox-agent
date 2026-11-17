@@ -34,14 +34,21 @@ const Service = z.object({
   restartOn: z.array(z.string()).default([]),
 });
 
-const TestStep = z.object({
-  name: z.string(),
-  layer: z.enum(['frontend', 'backend', 'database']),
-  run: z.string(),
-  cwd: z.string().default('.'),
-  /** JUnit XML report: a file, or a folder of *.xml files */
-  junit: z.string(),
-});
+/**
+ * A test step is either a command that writes a JUnit/TRX report, or a SQL check: the agent runs the
+ * learner's query against the mission's database and compares the result with the expected rows.
+ */
+const TestStep = z
+  .object({
+    name: z.string(),
+    layer: z.enum(['frontend', 'backend', 'database']),
+    run: z.string().optional(),
+    cwd: z.string().default('.'),
+    /** JUnit XML or TRX report: a file, or a folder of reports */
+    junit: z.string().optional(),
+    sql: z.object({ answer: z.string(), expected: z.string() }).optional(),
+  })
+  .refine((step) => (step.run && step.junit) || step.sql, { message: 'a test step needs run + junit, or sql' });
 
 export const WorkspaceFile = z.object({
   version: z.literal(1),
@@ -56,19 +63,24 @@ export const WorkspaceFile = z.object({
     engine: DatabaseEngine,
     /** Database and role name */
     name: z.string().regex(/^[a-z][a-z0-9_]{0,30}$/),
+    /** SQL file for the schema, when there is no migration tool (SQL practice problems) */
+    schema: z.string().optional(),
     /** SQL file loaded into the template after migrations, per engine */
     seed: z.string().optional(),
     /** SQL Server only: the whole template (migrations as SQL + seed), which the database pool loads */
     template: z.string().optional(),
   }),
   setup: z.array(Command).default([]),
-  migrate: z.object({
-    run: z.string(),
-    cwd: z.string().default('.'),
-    /** A regex with one capture group: the name of each migration the command applied */
-    applied: z.string(),
-  }),
-  services: z.object({ backend: Service.optional(), frontend: Service.optional() }),
+  /** Absent for SQL practice problems: the learner changes data in the SQL console only */
+  migrate: z
+    .object({
+      run: z.string(),
+      cwd: z.string().default('.'),
+      /** A regex with one capture group: the name of each migration the command applied */
+      applied: z.string(),
+    })
+    .optional(),
+  services: z.object({ backend: Service.optional(), frontend: Service.optional() }).default({}),
   test: z.array(TestStep).min(1),
   preview: z.object({ service: z.enum(['frontend', 'backend']), path: z.string().startsWith('/') }).nullable().default(null),
   env: z.record(z.string(), z.string()).default({}),
@@ -79,7 +91,7 @@ export function parseWorkspace(text: string): WorkspaceFile {
   const result = WorkspaceFile.safeParse(parse(text));
   if (!result.success) {
     const issue = result.error.issues[0];
-    throw new Error(`.reneplane/workspace.yaml is invalid at ${issue?.path.join('.') || '(root)'}: ${issue?.message}`);
+    throw new Error(`The workspace file is invalid at ${issue?.path.join('.') || '(root)'}: ${issue?.message}`);
   }
   return result.data;
 }

@@ -170,7 +170,7 @@ export class Mission {
       await step('clone', async () => {
         await this.ensureClone();
         // From now on the pinned commit's copy is the one that counts
-        this.workspace = parseWorkspace(await this.git!.show(this.state.open.codebank.ref, '.reneplane/workspace.yaml'));
+        this.workspace = await this.workspaceAtRef();
       });
       this.files = new MissionFiles(this.repoDir, this.git!);
       this.files.watch((path, content) => {
@@ -257,13 +257,18 @@ export class Mission {
     const { devExists } = await db.prepare(rebuild);
     if (rebuild) {
       const template = db.templateConnection();
-      const result = await runCommand(shellCommand(render(workspace.migrate.run, this.vars(template))), {
-        cwd: join(this.repoDir, workspace.migrate.cwd),
-        env: this.env(template),
-        onLine: (line) => this.log({ source: 'database', level: 'info', message: line }),
-        timeoutMs: 10 * 60_000,
-      });
-      if (result.code !== 0) throw new Error(`The starting migrations failed:\n${result.output.slice(-15).join('\n')}`);
+      if (workspace.migrate) {
+        const result = await runCommand(shellCommand(render(workspace.migrate.run, this.vars(template))), {
+          cwd: join(this.repoDir, workspace.migrate.cwd),
+          env: this.env(template),
+          onLine: (line) => this.log({ source: 'database', level: 'info', message: line }),
+          timeoutMs: 10 * 60_000,
+        });
+        if (result.code !== 0) throw new Error(`The starting migrations failed:\n${result.output.slice(-15).join('\n')}`);
+      } else if (workspace.database.schema) {
+        // SQL practice problems: a plain schema file instead of a migration tool
+        await db.runScript(await this.git!.show(this.state.open.codebank.ref, workspace.database.schema), template.name);
+      }
       if (workspace.database.seed) {
         await db.runScript(await this.git!.show(this.state.open.codebank.ref, workspace.database.seed), template.name);
       }
@@ -452,15 +457,17 @@ export class Mission {
   }
 
   async migrate(): Promise<string[]> {
-    const workspace = this.workspace!;
-    const result = await runCommand(shellCommand(render(workspace.migrate.run, this.vars())), {
-      cwd: join(this.repoDir, workspace.migrate.cwd),
+    const migrate = this.workspace!.migrate;
+    // SQL practice problems have no migrations: the answer is a query
+    if (!migrate) return [];
+    const result = await runCommand(shellCommand(render(migrate.run, this.vars())), {
+      cwd: join(this.repoDir, migrate.cwd),
       env: this.env(),
       onLine: (line) => this.log({ source: 'database', level: 'info', message: line }),
       timeoutMs: 10 * 60_000,
     });
     if (result.code !== 0) throw new AgentError('failed', `The migration failed:\n${result.output.slice(-12).join('\n')}`);
-    const pattern = new RegExp(workspace.migrate.applied, 'gm');
+    const pattern = new RegExp(migrate.applied, 'gm');
     // Some tools print a migration's name more than once (EF Core)
     const applied = [...new Set([...result.output.join('\n').matchAll(pattern)].map((match) => match[1] ?? match[0]))];
     applied.forEach((name) => this.log({ source: 'database', level: 'info', message: `migration applied: ${name}` }));
@@ -484,6 +491,7 @@ export class Mission {
         vars: this.vars(),
         env: this.env(),
         onLine: (line) => this.emit('run.line', { line }),
+        query: (sql) => this.requireDb().query(sql),
       });
       this.log({
         source: 'runner',
@@ -578,6 +586,21 @@ export class Mission {
     writeFileSync(join(this.dir, 'state.json'), JSON.stringify(this.state, null, 2), { mode: 0o600 });
   }
 
+  /** A repo with several variants (SQL practice: one per engine) has .reneplane/<variantId>.yaml */
+  private workspaceCandidates(): string[] {
+    return [`.reneplane/${this.state.open.variantId}.yaml`, '.reneplane/workspace.yaml'];
+  }
+
+  /** The workspace file from the pinned commit (never the working tree) */
+  private async workspaceAtRef(): Promise<WorkspaceFile> {
+    const ref = this.state.open.codebank.ref;
+    for (const path of this.workspaceCandidates()) {
+      const text = await this.git!.show(ref, path).catch(() => null);
+      if (text !== null) return parseWorkspace(text);
+    }
+    throw new AgentError('failed', 'This codebank has no workspace file for this mission');
+  }
+
   private async readWorkspace(): Promise<WorkspaceFile> {
     const { repo, ref } = this.state.open.codebank;
     if (this.state.cloned && existsSync(join(this.repoDir, '.git'))) {
@@ -586,16 +609,21 @@ export class Mission {
         this.runtimes.set('git', git);
         this.git = new Git(git, this.repoDir);
       }
-      return parseWorkspace(await this.git.show(ref, '.reneplane/workspace.yaml'));
+      return this.workspaceAtRef();
     }
-    if (this.options.dev && this.options.codebankDir) {
-      return parseWorkspace(readFileSync(join(this.options.codebankDir, repo.split('/')[1]!, '.reneplane', 'workspace.yaml'), 'utf8'));
+    for (const path of this.workspaceCandidates()) {
+      if (this.options.dev && this.options.codebankDir) {
+        const file = join(this.options.codebankDir, repo.split('/')[1]!, ...path.split('/'));
+        if (existsSync(file)) return parseWorkspace(readFileSync(file, 'utf8'));
+        continue;
+      }
+      const response = await fetch(`https://raw.githubusercontent.com/${repo}/${encodeURIComponent(ref)}/${path}`, {
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (response.ok) return parseWorkspace(await response.text());
+      if (response.status !== 404) throw new AgentError('failed', `Couldn't read ${repo}@${ref} (${response.status}). Check your internet connection.`);
     }
-    const response = await fetch(`https://raw.githubusercontent.com/${repo}/${encodeURIComponent(ref)}/.reneplane/workspace.yaml`, {
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (!response.ok) throw new AgentError('failed', `Couldn't read ${repo}@${ref} (${response.status}). Check your internet connection.`);
-    return parseWorkspace(await response.text());
+    throw new AgentError('failed', `${repo}@${ref} has no workspace file for this mission`);
   }
 
   private log(entry: LogEvent): void {

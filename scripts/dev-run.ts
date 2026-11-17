@@ -7,7 +7,7 @@ import { PATHS } from '../src/config.js';
 import { addPendingPairing } from '../src/pairing.js';
 import { randomToken } from '../src/security.js';
 
-const [attemptId = 'att_dev1', repo = 'reneplane/codebank-shopkart-node', ref = 'shop-142-v1', fixDir] = process.argv.slice(2);
+const [attemptId = 'att_dev1', repo = 'reneplane/codebank-shopkart-node', ref = 'shop-142-v1', fixDir, variantId = 'dev'] = process.argv.slice(2);
 const pairToken = randomToken(32);
 addPendingPairing(pairToken);
 
@@ -35,7 +35,7 @@ const call = <T>(method: string, params: unknown = {}) =>
   });
 
 session = (await call<{ sessionToken: string }>('hello', { protocol: 1, client: 'dev-run', pairToken })).sessionToken;
-await call('mission.plan', { attemptId, missionId: 'shop-142-cancel-restock', variantId: 'dev', codebank: { repo, ref } });
+await call('mission.plan', { attemptId, missionId: 'mission', variantId, codebank: { repo, ref } });
 await call('mission.boot', { attemptId });
 
 if (fixDir) {

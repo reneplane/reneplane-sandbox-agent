@@ -1,13 +1,15 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { XMLParser } from 'fast-xml-parser';
-import type { RunResult, TestCheck } from '../protocol.js';
+import type { QueryResult, RunResult, TestCheck } from '../protocol.js';
 import { runCommand, type Env } from '../util/process.js';
+import { compareResult, type ExpectedResult } from './sqlcheck.js';
 import { render, shellCommand, type Vars, type WorkspaceFile } from './workspace.js';
 
 /**
- * Run the visible tests and turn their JUnit XML into the IDE's RunResult. One parser covers Vitest,
- * pytest, Maven Surefire and dotnet test (JUnit logger), so every stack reports the same way.
+ * Run the visible tests and turn their reports into the IDE's RunResult. One parser covers Vitest,
+ * pytest and Maven Surefire (JUnit XML) and dotnet test (TRX), so every stack reports the same way.
+ * SQL practice problems use a built-in check instead: run the learner's query, compare the rows.
  */
 
 type Step = WorkspaceFile['test'][number];
@@ -19,6 +21,7 @@ export async function runTests(options: {
   vars: Vars;
   env: Env;
   onLine: (line: string) => void;
+  query: (sql: string) => Promise<QueryResult>;
 }): Promise<RunResult> {
   const started = Date.now();
   const id = `run_${started.toString(36)}`;
@@ -32,12 +35,16 @@ export async function runTests(options: {
   let buildOk = true;
 
   for (const step of options.steps) {
+    if (step.sql) {
+      checks.push(...(await runSqlCheck(step, options, checks.length)));
+      continue;
+    }
     // Reports inside the repo (e.g. Surefire's target/surefire-reports) are relative to the repo root.
     // Clear them first, so a build that fails can't be read as the previous run's results.
-    const report = resolve(options.repo, render(step.junit, vars));
+    const report = resolve(options.repo, render(step.junit!, vars));
     rmSync(report, { recursive: true, force: true });
-    options.onLine(`\u001b[2m$ ${render(step.run, { ...vars, 'db.password': '••••' })}\u001b[0m`);
-    const result = await runCommand(shellCommand(render(step.run, vars)), {
+    options.onLine(`\u001b[2m$ ${render(step.run!, { ...vars, 'db.password': '••••' })}\u001b[0m`);
+    const result = await runCommand(shellCommand(render(step.run!, vars)), {
       cwd: join(options.repo, step.cwd),
       env: options.env,
       onLine: options.onLine,
@@ -63,6 +70,37 @@ export async function runTests(options: {
     passed,
     failed,
   };
+}
+
+/** Run the learner's answer.sql against the mission database and compare with the expected rows */
+async function runSqlCheck(step: Step, options: { repo: string; onLine: (line: string) => void; query: (sql: string) => Promise<QueryResult> }, offset: number): Promise<TestCheck[]> {
+  const { answer, expected } = step.sql!;
+  const expectation = JSON.parse(readFileSync(resolve(options.repo, expected), 'utf8')) as ExpectedResult;
+  const sql = existsSync(resolve(options.repo, answer)) ? readFileSync(resolve(options.repo, answer), 'utf8') : '';
+  options.onLine(`\u001b[2m$ running ${answer} against your database\u001b[0m`);
+  const started = Date.now();
+  let result: QueryResult | null = null;
+  let error: string | null = null;
+  if (!sql.replace(/--[^\n]*/g, '').trim()) error = `${answer} is empty`;
+  else {
+    try {
+      result = await options.query(sql);
+    } catch (failure) {
+      error = (failure as Error).message;
+    }
+  }
+  const outcome = compareResult(result, error, expectation);
+  options.onLine(outcome.every((check) => check.passed) ? 'The result matches.' : `The result doesn't match yet: ${outcome.find((check) => !check.passed)?.message}`);
+  return outcome.map((check, index) => ({
+    id: `t${offset + index + 1}`,
+    name: check.name,
+    layer: step.layer,
+    status: check.passed ? 'passed' : error ? 'error' : 'failed',
+    durationMs: index === 0 ? Date.now() - started : 0,
+    message: check.passed ? null : check.message,
+    expected: check.expected,
+    actual: check.actual,
+  }));
 }
 
 const parser = new XMLParser({
