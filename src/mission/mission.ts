@@ -321,7 +321,8 @@ export class Mission {
 
   private vars(connection?: DatabaseConnection): Vars {
     const db = connection ?? this.db?.connection();
-    const vars: Vars = {};
+    // {{repo}}: the working tree's absolute path, with forward slashes on every OS
+    const vars: Vars = { repo: this.repoDir.split('\\').join('/') };
     if (this.ports.frontend) vars['ports.frontend'] = this.ports.frontend;
     if (this.ports.backend) {
       vars['ports.backend'] = this.ports.backend;

@@ -85,6 +85,29 @@ describe('JUnit reports', () => {
     expect(surefire).toMatchObject({ status: 'failed', expected: '6', actual: '4' });
   });
 
+  it('reads dotnet test TRX with display names and xUnit expected/actual', () => {
+    const file = join(dir, 'backend.trx');
+    writeFileSync(
+      file,
+      `<?xml version="1.0" encoding="utf-8"?>
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult testName="POST /api/orders/{id}/cancel restores stock" outcome="Failed" duration="00:00:01.2500000">
+      <Output><ErrorInfo><Message>Assert.Equal() Failure: Values differ
+Expected: 6
+Actual:   4</Message></ErrorInfo></Output>
+    </UnitTestResult>
+    <UnitTestResult testName="GET /api/orders lists newest first" outcome="Passed" duration="00:00:00.0300000" />
+  </Results>
+</TestRun>`,
+    );
+    const checks = readJunit(file, 'backend');
+    expect(checks).toHaveLength(2);
+    expect(checks[0]).toMatchObject({ name: 'POST /api/orders/{id}/cancel restores stock', status: 'failed', expected: '6', actual: '4', durationMs: 1250 });
+    expect(checks[0]!.message).toBe('Assert.Equal() Failure: Values differ (expected 6, got 4)');
+    expect(checks[1]).toMatchObject({ status: 'passed' });
+  });
+
   it('returns nothing when there is no report (the build failed)', () => {
     expect(readJunit(join(dir, 'missing.xml'), 'frontend')).toEqual([]);
   });

@@ -83,16 +83,24 @@ interface XmlCase {
   skipped?: unknown;
 }
 
+/**
+ * Read a test report: JUnit XML (Vitest, pytest, Surefire), or a TRX file from `dotnet test`, which
+ * keeps xUnit's [Fact(DisplayName = …)] names and its Expected/Actual lines.
+ */
 export function readJunit(location: string, layer: TestCheck['layer'], offset = 0): TestCheck[] {
   if (!existsSync(location)) return [];
   const files = statSync(location).isDirectory()
     ? readdirSync(location)
-        .filter((file) => file.endsWith('.xml'))
+        .filter((file) => file.endsWith('.xml') || file.endsWith('.trx'))
         .map((file) => join(location, file))
     : [location];
   const checks: TestCheck[] = [];
   for (const file of files) {
     const document = parser.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    if (document.TestRun) {
+      checks.push(...readTrx(document.TestRun as Record<string, unknown>, layer, offset + checks.length));
+      continue;
+    }
     for (const testcase of collectCases(document)) {
       const failure = testcase.failure ?? testcase.error;
       const status: TestCheck['status'] = failure !== undefined ? (testcase.error !== undefined ? 'error' : 'failed') : testcase.skipped !== undefined ? 'skipped' : 'passed';
@@ -110,6 +118,35 @@ export function readJunit(location: string, layer: TestCheck['layer'], offset = 
     }
   }
   return checks;
+}
+
+interface TrxResult {
+  testName?: string;
+  outcome?: string;
+  duration?: string;
+  Output?: { ErrorInfo?: { Message?: string; StackTrace?: string } };
+}
+
+function readTrx(run: Record<string, unknown>, layer: TestCheck['layer'], offset: number): TestCheck[] {
+  const results = (run.Results as { UnitTestResult?: TrxResult | TrxResult[] } | undefined)?.UnitTestResult;
+  const list = Array.isArray(results) ? results : results ? [results] : [];
+  return list.map((result, index) => {
+    const outcome = String(result.outcome ?? '');
+    const status: TestCheck['status'] = outcome === 'Passed' ? 'passed' : outcome === 'Failed' ? 'failed' : outcome === 'Error' ? 'error' : 'skipped';
+    const full = String(result.Output?.ErrorInfo?.Message ?? '').trim();
+    const detail = status === 'failed' || status === 'error' ? describeText(full) : null;
+    const [hours = '0', minutes = '0', seconds = '0'] = String(result.duration ?? '0:0:0').split(':');
+    return {
+      id: `t${offset + index + 1}`,
+      name: String(result.testName ?? 'test'),
+      layer,
+      status,
+      durationMs: Math.round((Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds)) * 1000),
+      message: detail?.message ?? null,
+      expected: detail?.expected ?? null,
+      actual: detail?.actual ?? null,
+    };
+  });
 }
 
 function collectCases(node: unknown): XmlCase[] {
@@ -136,7 +173,15 @@ function describeFailure(failure: unknown): { message: string; expected: string 
   const node = Array.isArray(failure) ? failure[0] : failure;
   const attributes = typeof node === 'object' && node ? (node as Record<string, string>) : {};
   const text = typeof node === 'string' ? node : (attributes['#text'] ?? '');
-  const message = (attributes.message ?? text).split('\n').find((line) => line.trim())?.trim() ?? 'Failed';
+  return describeText(attributes.message ?? text);
+}
+
+function describeText(full: string): { message: string; expected: string | null; actual: string | null } {
+  // xUnit: "Assert.Equal() Failure: Values differ\nExpected: 6\nActual:   4"
+  const xunit = /Expected:\s*(.+?)\r?\n\s*Actual:\s*(.+)/.exec(full);
+  const firstLine = full.split('\n').find((line) => line.trim())?.trim() ?? 'Failed';
+  if (xunit) return { message: `${firstLine} (expected ${xunit[1]!.trim()}, got ${xunit[2]!.trim()})`, expected: xunit[1]!.trim(), actual: xunit[2]!.trim() };
+  const message = firstLine;
   // Vitest/Jest: "expected 4 to be 6"; JUnit/AssertJ: "expected: <6> but was: <4>"; pytest: "assert 4 == 6"
   const jest = /expected (.+?) to (?:be|equal|deeply equal) (.+)$/i.exec(message);
   if (jest) return { message, expected: jest[2]!.trim(), actual: jest[1]!.trim() };
