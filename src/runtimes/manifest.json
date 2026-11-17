@@ -1,0 +1,85 @@
+{
+  "node": {
+    "version": "22.23.5",
+    "platforms": {
+      "win32-x64": {
+        "url": "https://nodejs.org/dist/v22.23.5/node-v22.23.5-win-x64.zip",
+        "sha256": "4a191082e9706866830379d577d2cc8a50c776fcd9436a8d061b063ed0d9a0e3",
+        "format": "zip",
+        "strip": "node-v22.23.5-win-x64"
+      },
+      "linux-x64": {
+        "url": "https://nodejs.org/dist/v22.23.5/node-v22.23.5-linux-x64.tar.xz",
+        "sha256": "cdeb8670a0c81f51b4dc4ac61919f9b1ad917b304bf8221eb939570663d240f8",
+        "format": "tar",
+        "strip": "node-v22.23.5-linux-x64"
+      },
+      "darwin-arm64": {
+        "url": "https://nodejs.org/dist/v22.23.5/node-v22.23.5-darwin-arm64.tar.gz",
+        "sha256": "e7131995759b61a0170b646010d2ad35a5d37b4cb0d471f3e8317eac6f742f3d",
+        "format": "tar",
+        "strip": "node-v22.23.5-darwin-arm64"
+      },
+      "darwin-x64": {
+        "url": "https://nodejs.org/dist/v22.23.5/node-v22.23.5-darwin-x64.tar.gz",
+        "sha256": "c53383238206b9ae4db23c5d8a63645e2e753bec8ab51a49cc81939aa64e9422",
+        "format": "tar",
+        "strip": "node-v22.23.5-darwin-x64"
+      }
+    }
+  },
+  "postgres": {
+    "version": "16.16",
+    "platforms": {
+      "win32-x64": {
+        "url": "https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-windows-amd64/16.16.0/embedded-postgres-binaries-windows-amd64-16.16.0.jar",
+        "sha256": "f9244f7a47415f8b777b6113b59209033de598965340926d992a70dcf3f557ad",
+        "format": "jar-txz",
+        "inner": "postgres-windows-x86_64.txz"
+      },
+      "linux-x64": {
+        "url": "https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-linux-amd64/16.16.0/embedded-postgres-binaries-linux-amd64-16.16.0.jar",
+        "sha256": "585c1697098e5fbc8716b26901cdb3a829e6f3be5b5efa13dfe87b7e5cc55f5b",
+        "format": "jar-txz",
+        "inner": "postgres-linux-x86_64.txz"
+      },
+      "darwin-arm64": {
+        "url": "https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-darwin-arm64v8/16.16.0/embedded-postgres-binaries-darwin-arm64v8-16.16.0.jar",
+        "sha256": "f8c8cbd962a25a15e918fe094813a9ad48e6c99e0c9e93a1cf98b986cb840dd7",
+        "format": "jar-txz",
+        "inner": "postgres-darwin-arm_64.txz"
+      },
+      "darwin-x64": {
+        "url": "https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-darwin-amd64/16.16.0/embedded-postgres-binaries-darwin-amd64-16.16.0.jar",
+        "sha256": "551a49cfc9997905b271bc49e06e5e55f2874e1606d8ff88993700520addab30",
+        "format": "jar-txz",
+        "inner": "postgres-darwin-x86_64.txz"
+      }
+    }
+  },
+  "git": {
+    "version": "2.56.1",
+    "platforms": {
+      "win32-x64": {
+        "url": "https://github.com/desktop/dugite-native/releases/download/v2.56.1/dugite-native-v2.56.1-238326e-windows-x64.tar.gz",
+        "sha256": "e9fa2c78952aa2c2154c26dbd4999f93269896e9fc902fa9fe840412d4ffdb04",
+        "format": "tar"
+      },
+      "linux-x64": {
+        "url": "https://github.com/desktop/dugite-native/releases/download/v2.56.1/dugite-native-v2.56.1-238326e-ubuntu-x64.tar.gz",
+        "sha256": "e5bc3e8e80b57a5bcd8da18d59b23f5b39533d19019ac1d50b0bd34f051d111d",
+        "format": "tar"
+      },
+      "darwin-arm64": {
+        "url": "https://github.com/desktop/dugite-native/releases/download/v2.56.1/dugite-native-v2.56.1-238326e-macOS-arm64.tar.gz",
+        "sha256": "a882ec6882416b57d212a22bac845ae27944f96cf73453a864f6a12c17863a79",
+        "format": "tar"
+      },
+      "darwin-x64": {
+        "url": "https://github.com/desktop/dugite-native/releases/download/v2.56.1/dugite-native-v2.56.1-238326e-macOS-x64.tar.gz",
+        "sha256": "3fdb0c2f102fe0273d64b5d5fb77315c19f2b4648a154593723cb9ed98f2bc7d",
+        "format": "tar"
+      }
+    }
+  }
+}
