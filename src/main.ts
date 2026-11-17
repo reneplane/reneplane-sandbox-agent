@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, PATHS, updateConfig } from './config.js';
@@ -195,7 +195,21 @@ async function main(): Promise<void> {
     case 'uninstall': {
       if (await control('stop')) await waitUntilStopped();
       await unregisterAutostart();
-      for (const dir of flag('all') ? [PATHS.home] : [PATHS.bin, join(PATHS.home, 'agent.json')]) rmSync(dir, { recursive: true, force: true });
+      const targets = flag('all') ? [PATHS.home] : [PATHS.bin, join(PATHS.home, 'agent.json')];
+      if (process.platform === 'win32') {
+        // This command runs on bin\node.exe, which Windows won't delete while it runs: remove the rest
+        // now, and the folders a moment after this process exits
+        for (const target of targets) {
+          if (target === PATHS.home) {
+            for (const entry of readdirSync(PATHS.home)) if (join(PATHS.home, entry) !== PATHS.bin) rmSync(join(PATHS.home, entry), { recursive: true, force: true });
+          } else if (target !== PATHS.bin) rmSync(target, { recursive: true, force: true });
+        }
+        const folder = flag('all') ? PATHS.home : PATHS.bin;
+        // cmd.exe parses its own quotes: pass the command line verbatim (/s keeps the outer quotes simple)
+        spawn('cmd.exe', ['/d', '/s', '/c', `"ping -n 4 127.0.0.1 >nul & rmdir /s /q "${folder}""`], { detached: true, windowsHide: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
+      } else {
+        for (const target of targets) rmSync(target, { recursive: true, force: true });
+      }
       console.log(
         flag('all')
           ? 'Reneplane Local and everything it downloaded were removed.'
