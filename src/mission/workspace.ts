@@ -30,6 +30,8 @@ const Service = z.object({
   /** Path that answers once the service is up */
   ready: z.string().default('/'),
   env: z.record(z.string(), z.string()).default({}),
+  /** Restart when a file under one of these paths changes (stacks without their own hot reload, e.g. Spring Boot) */
+  restartOn: z.array(z.string()).default([]),
 });
 
 const TestStep = z.object({

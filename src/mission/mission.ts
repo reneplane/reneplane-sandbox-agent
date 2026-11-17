@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PATHS } from '../config.js';
+import { LocalMysql } from '../db/mysql.js';
 import { LocalPostgres } from '../db/postgres.js';
 import type { DatabaseConnection, DatabaseProvider } from '../db/types.js';
 import { createLogger } from '../log.js';
@@ -169,7 +170,10 @@ export class Mission {
         this.workspace = parseWorkspace(await this.git!.show(this.state.open.codebank.ref, '.reneplane/workspace.yaml'));
       });
       this.files = new MissionFiles(this.repoDir, this.git!);
-      this.files.watch((path, content) => this.emit('fs.change', { path, content }));
+      this.files.watch((path, content) => {
+        this.emit('fs.change', { path, content });
+        this.onFileChanged(path);
+      });
 
       for (const [index, setup] of workspace.setup.entries()) {
         await step(`setup:${index}`, () => this.runSetup(setup));
@@ -198,7 +202,11 @@ export class Mission {
     const workspace = this.workspace!;
     const names: RuntimeName[] = ['git'];
     if (workspace.runtimes.node || workspace.services.frontend) names.push('node');
+    if (workspace.runtimes.python) names.push('uv');
+    if (workspace.runtimes.java) names.push('java');
+    if (workspace.runtimes.dotnet) names.push('dotnet');
     if (workspace.database.engine === 'postgres') names.push('postgres');
+    if (workspace.database.engine === 'mysql') names.push('mysql');
     return names;
   }
 
@@ -274,6 +282,7 @@ export class Mission {
   private createDatabase(): DatabaseProvider {
     const { engine, name } = this.workspace!.database;
     if (engine === 'postgres') return new LocalPostgres(join(this.dir, 'db', 'postgres'), name, this.state.secrets);
+    if (engine === 'mysql') return new LocalMysql(join(this.dir, 'db', 'mysql'), name, this.state.secrets);
     throw new AgentError('database_unavailable', `${engine} isn't supported by this version of Reneplane Local yet`);
   }
 
@@ -356,10 +365,32 @@ export class Mission {
 
   writeFile(path: string, content: string): void {
     this.requireFiles().write(path, content);
+    this.onFileChanged(path);
   }
 
   removeFile(path: string): void {
     this.requireFiles().remove(path);
+    this.onFileChanged(path);
+  }
+
+  private restartTimers = new Map<'frontend' | 'backend', NodeJS.Timeout>();
+
+  /** Restart a service whose sources changed, if it can't reload by itself (restartOn in workspace.yaml) */
+  private onFileChanged(path: string): void {
+    if (!this.booted || !this.workspace) return;
+    for (const name of ['backend', 'frontend'] as const) {
+      const service = this.workspace.services[name];
+      if (!service?.restartOn.some((prefix) => path.startsWith(prefix))) continue;
+      clearTimeout(this.restartTimers.get(name));
+      this.restartTimers.set(
+        name,
+        setTimeout(() => {
+          this.restartTimers.delete(name);
+          this.log({ source: name, level: 'info', message: `${path} changed; restarting the ${name}` });
+          void this.startService(name).catch((error: Error) => this.log({ source: name, level: 'error', message: error.message }));
+        }, 800),
+      );
+    }
   }
 
   private requireFiles(): MissionFiles {

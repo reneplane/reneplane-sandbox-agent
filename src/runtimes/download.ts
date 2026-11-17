@@ -6,14 +6,19 @@ import { pipeline } from 'node:stream/promises';
 import { unzipSync } from 'fflate';
 import { runFile } from '../util/process.js';
 
-/** Download a file, checking its SHA-256 as it streams. Reports "12 of 48 MB". */
-export async function downloadVerified(url: string, sha256: string, destination: string, onProgress?: (detail: string) => void): Promise<void> {
-  if (existsSync(destination) && hashFile(destination) === sha256) return;
+export interface Checksum {
+  algorithm: 'sha256' | 'sha512';
+  value: string;
+}
+
+/** Download a file, checking its hash as it streams. Reports "12 of 48 MB". */
+export async function downloadVerified(url: string, checksum: Checksum, destination: string, onProgress?: (detail: string) => void): Promise<void> {
+  if (existsSync(destination) && hashFile(destination, checksum.algorithm) === checksum.value) return;
   mkdirSync(dirname(destination), { recursive: true });
   const response = await fetch(url, { redirect: 'follow' });
   if (!response.ok || !response.body) throw new Error(`Download failed (${response.status}): ${url}`);
   const total = Number(response.headers.get('content-length') ?? 0);
-  const hash = createHash('sha256');
+  const hash = createHash(checksum.algorithm);
   let received = 0;
   let lastReport = 0;
   const partial = `${destination}.part`;
@@ -28,9 +33,9 @@ export async function downloadVerified(url: string, sha256: string, destination:
   });
   await pipeline(source, createWriteStream(partial));
   const actual = hash.digest('hex');
-  if (actual !== sha256) {
+  if (actual !== checksum.value) {
     rmSync(partial, { force: true });
-    throw new Error(`Checksum mismatch for ${url}: expected ${sha256}, got ${actual}. The download was discarded.`);
+    throw new Error(`Checksum mismatch for ${url}: expected ${checksum.value}, got ${actual}. The download was discarded.`);
   }
   renameSync(partial, destination);
 }
@@ -39,8 +44,8 @@ function mb(bytes: number): string {
   return (bytes / 1024 / 1024).toFixed(0);
 }
 
-function hashFile(path: string): string {
-  return createHash('sha256').update(readFileSync(path)).digest('hex');
+function hashFile(path: string, algorithm: Checksum['algorithm']): string {
+  return createHash(algorithm).update(readFileSync(path)).digest('hex');
 }
 
 /** The OS's own tar: bsdtar on Windows 10+ and macOS (reads zip, gz, xz), GNU tar on Linux */

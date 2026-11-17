@@ -67,6 +67,8 @@ const parser = new XMLParser({
   attributeNamePrefix: '',
   textNodeName: '#text',
   isArray: (name) => name === 'testsuite' || name === 'testcase',
+  // pytest writes line breaks in attributes as &#10;
+  htmlEntities: true,
 });
 
 interface XmlCase {

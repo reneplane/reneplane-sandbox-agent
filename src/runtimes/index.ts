@@ -17,7 +17,8 @@ export type RuntimeName = keyof typeof manifest;
 
 interface PlatformEntry {
   url: string;
-  sha256: string;
+  sha256?: string;
+  sha512?: string;
   format: ArchiveFormat;
   strip?: string;
 }
@@ -36,6 +37,10 @@ export const LABELS: Record<RuntimeName, string> = {
   node: 'Node.js',
   postgres: 'PostgreSQL',
   git: 'Git',
+  uv: 'Python (uv)',
+  java: 'Java (Temurin JDK)',
+  mysql: 'MySQL',
+  dotnet: '.NET SDK',
 };
 
 export function platformKey(): string {
@@ -49,7 +54,7 @@ export function runtimeVersion(name: RuntimeName): string {
 function entry(name: RuntimeName): PlatformEntry {
   const platforms = manifest[name].platforms as Record<string, PlatformEntry>;
   const found = platforms[platformKey()];
-  if (!found) throw new Error(`${LABELS[name]} isn't available for ${platformKey()} yet`);
+  if (!found) throw new Error(`${LABELS[name]} isn't available for ${describePlatform()} yet, so this mission can't run on this computer.`);
   return found;
 }
 
@@ -78,7 +83,8 @@ async function install(name: RuntimeName, onProgress?: (detail: string) => void)
   const dir = dirOf(name);
   const archive = join(PATHS.downloads, platform.url.split('/').pop()!);
   log.info(`Installing ${name} ${runtimeVersion(name)} from ${platform.url}`);
-  await downloadVerified(platform.url, platform.sha256, archive, onProgress);
+  const checksum = platform.sha512 ? { algorithm: 'sha512' as const, value: platform.sha512 } : { algorithm: 'sha256' as const, value: platform.sha256! };
+  await downloadVerified(platform.url, checksum, archive, onProgress);
   onProgress?.('Unpacking');
   await unpack(archive, dir, platform.format, platform.strip);
   writeFileSync(join(dir, '.complete'), new Date().toISOString());
@@ -97,7 +103,61 @@ function describe(name: RuntimeName): Runtime {
       return { name, version, dir, path: [join(dir, 'bin')], env: {} };
     case 'git':
       return gitRuntime(dir, version);
+    case 'uv':
+      return {
+        name,
+        version,
+        dir,
+        path: [dir],
+        env: {
+          UV_CACHE_DIR: join(PATHS.cache, 'uv'),
+          UV_PYTHON_INSTALL_DIR: join(PATHS.runtimes, 'python'),
+          // Never pick up a Python the learner installed; the mission's version comes from uv
+          UV_PYTHON_PREFERENCE: 'only-managed',
+          UV_LINK_MODE: 'copy',
+          UV_NO_PROGRESS: '1',
+        },
+      };
+    case 'java': {
+      const home = process.platform === 'darwin' ? join(dir, 'Contents', 'Home') : dir;
+      return {
+        name,
+        version,
+        dir,
+        path: [join(home, 'bin')],
+        env: {
+          JAVA_HOME: home,
+          // Maven (through each codebank's mvnw) and its repository, shared by every mission
+          MAVEN_USER_HOME: join(PATHS.cache, 'maven'),
+          MAVEN_OPTS: `-Dmaven.repo.local=${join(PATHS.cache, 'm2')}`,
+        },
+      };
+    }
+    case 'mysql':
+      return { name, version, dir, path: [join(dir, 'bin')], env: {} };
+    case 'dotnet':
+      return {
+        name,
+        version,
+        dir,
+        path: [dir],
+        env: {
+          DOTNET_ROOT: dir,
+          DOTNET_CLI_HOME: join(PATHS.cache, 'dotnet-home'),
+          NUGET_PACKAGES: join(PATHS.cache, 'nuget'),
+          DOTNET_CLI_TELEMETRY_OPTOUT: '1',
+          DOTNET_NOLOGO: '1',
+          DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1',
+          DOTNET_MULTILEVEL_LOOKUP: '0',
+        },
+      };
   }
+}
+
+function describePlatform(): string {
+  const os = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }[process.platform as string] ?? process.platform;
+  const arch = process.platform === 'darwin' ? (process.arch === 'arm64' ? ' (Apple Silicon)' : ' (Intel)') : process.arch === 'arm64' ? ' on Arm' : '';
+  return `${os}${arch}`;
 }
 
 /** The same environment GitHub Desktop's dugite sets up for its bundled Git */

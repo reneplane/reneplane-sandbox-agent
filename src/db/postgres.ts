@@ -177,7 +177,8 @@ export class LocalPostgres implements DatabaseProvider {
       SELECT c.table_name, c.column_name, c.data_type, c.is_nullable, c.column_default
       FROM information_schema.columns c
       JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
-      WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE' AND c.table_name <> 'schema_migrations'
+      WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+        AND c.table_name NOT IN ('schema_migrations', 'alembic_version', 'flyway_schema_history', '__EFMigrationsHistory')
       ORDER BY c.table_name, c.ordinal_position`);
     const { rows: keys } = await pool.query<{
       table_name: string;
