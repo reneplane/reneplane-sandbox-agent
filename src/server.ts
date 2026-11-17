@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { DEFAULT_PORTS, loadConfig, PATHS } from './config.js';
+import { DEFAULT_PORTS, ensureDirs, loadConfig, PATHS } from './config.js';
 import { runDoctor } from './doctor.js';
 import { createLogger } from './log.js';
 import { MissionManager, type MissionClient } from './mission/manager.js';
@@ -39,6 +39,8 @@ export interface RunningServer {
 export const STATUS_FILE = () => join(PATHS.home, 'agent.json');
 
 export async function startServer(options: ServerOptions): Promise<RunningServer> {
+  // A brand-new computer has no ~/.reneplane yet
+  ensureDirs();
   const manager = new MissionManager(options);
   let port = 0;
   for (const candidate of DEFAULT_PORTS) {
