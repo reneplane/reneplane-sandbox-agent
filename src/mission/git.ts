@@ -1,27 +1,35 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { PATHS } from '../config.js';
 import type { GitCommit } from '../protocol.js';
 import { gitBinary, type Runtime } from '../runtimes/index.js';
 import { buildEnv, runFile, type Env } from '../util/process.js';
 
-/** The bundled Git (dugite-native), never the system one, so a fresh Mac never sees the Xcode prompt */
+/**
+ * The agent's own git calls. They use the bundled Git (dugite-native), never the system one, so a fresh
+ * Mac never sees the Xcode prompt, and an empty config of their own: settings in the learner's
+ * ~/.gitconfig (diff.noprefix, diff.external, color.diff=always, core.autocrlf, …) must never change a
+ * diff the grader parses or a patch the agent applies. The learner's terminal keeps their normal git.
+ */
 export class Git {
   readonly env: Env;
   private readonly binary: string;
 
   constructor(
     runtime: Runtime,
-    private readonly cwd: string,
+    readonly cwd: string,
   ) {
     this.binary = gitBinary(runtime);
-    this.env = buildEnv(runtime.path, {
-      ...runtime.env,
-      GIT_TERMINAL_PROMPT: '0',
-      GIT_CONFIG_NOSYSTEM: '1',
-      LC_ALL: 'C',
-    });
+    this.env = buildEnv(runtime.path, { ...runtime.env, ...isolatedGitEnv() });
+  }
+
+  /** Tests and tools: the git on PATH, with the same isolation */
+  static system(cwd: string): Git {
+    const git = Object.create(Git.prototype) as Git;
+    Object.assign(git, { cwd, binary: process.platform === 'win32' ? 'git.exe' : 'git', env: buildEnv([], isolatedGitEnv()) });
+    return git;
   }
 
   async run(args: string[], options: { cwd?: string; input?: string; env?: Env; timeoutMs?: number } = {}): Promise<string> {
@@ -37,8 +45,28 @@ export class Git {
 
   /** Clone `source` at `ref`, then start the learner's branch there */
   async clone(source: string, ref: string, branch: string): Promise<void> {
-    await this.run(['clone', '--quiet', '--no-checkout', source, this.cwd], { cwd: tmpdir(), timeoutMs: 10 * 60_000 });
+    // autocrlf is set for the clone itself: set afterwards, the first checkout would already have used it
+    await this.run(['clone', '--quiet', '--no-checkout', '-c', 'core.autocrlf=false', source, this.cwd], { cwd: tmpdir(), timeoutMs: 10 * 60_000 });
     await this.run(['-c', 'advice.detachedHead=false', 'checkout', '--quiet', '-b', branch, ref]);
+    await this.configureLearner();
+  }
+
+  /**
+   * Clone a starter bundle and start the learner's branch at its tag. The tag must point at
+   * `expectedCommit` (from the bundle's manifest), and the clone keeps no remote: origin would only be
+   * a path inside the session folder.
+   */
+  async cloneBundle(bundle: string, tag: string, branch: string, expectedCommit: string): Promise<void> {
+    await this.run(['bundle', 'verify', '--quiet', bundle], { cwd: tmpdir() });
+    await this.run(['clone', '--quiet', '--no-checkout', '-c', 'core.autocrlf=false', bundle, this.cwd], { cwd: tmpdir(), timeoutMs: 5 * 60_000 });
+    const tagged = (await this.run(['rev-parse', `refs/tags/${tag}^{commit}`])).trim();
+    if (tagged !== expectedCommit) throw new Error(`The starter bundle's ${tag} is ${tagged}, expected ${expectedCommit}`);
+    await this.run(['-c', 'advice.detachedHead=false', 'checkout', '--quiet', '-B', branch, tag]);
+    await this.run(['remote', 'remove', 'origin']);
+    await this.configureLearner();
+  }
+
+  private async configureLearner(): Promise<void> {
     await this.run(['config', 'user.name', 'You']);
     await this.run(['config', 'user.email', 'you@reneplane.local']);
     await this.run(['config', 'core.autocrlf', 'false']);
@@ -98,7 +126,31 @@ export class Git {
     try {
       await this.run(['read-tree', 'HEAD'], { env });
       await this.run(['add', '-A'], { env });
-      return await this.run(['diff', '--cached', '--binary', '--no-color', ref], { env });
+      return await this.run(['diff', '--cached', ...STABLE_DIFF, ref], { env });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  /**
+   * Put a saved diff back on a fresh working tree at `base` (resuming a session, or the checker trying
+   * the reference). It goes through a throwaway index rather than `git apply` on the files, so files
+   * checked out with CRLF (.gitattributes eol=crlf), binaries, deletions and renames all apply against
+   * the normalised content the diff was made from. Afterwards HEAD is `base` again and the changes are
+   * ordinary working-tree changes (the learner's own commits come back uncommitted).
+   */
+  async restore(base: string, patch: string): Promise<void> {
+    if (!patch.trim()) return;
+    if ((await this.status()).length) throw new Error('The working tree has changes already; restoring needs a fresh checkout');
+    const dir = mkdtempSync(join(tmpdir(), 'reneplane-restore-'));
+    const env = { GIT_INDEX_FILE: join(dir, 'index') };
+    try {
+      await this.run(['read-tree', base], { env });
+      await this.run(['apply', '--cached', '--binary', '--whitespace=nowarn', '-'], { env, input: patch });
+      const tree = (await this.run(['write-tree'], { env })).trim();
+      const commit = (await this.run(['commit-tree', tree, '-p', base, '-m', 'restore'], { env: COMMIT_IDENTITY })).trim();
+      await this.run(['reset', '--quiet', '--hard', commit]);
+      await this.run(['reset', '--quiet', base]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -150,4 +202,27 @@ export class Git {
       child.stdin.end(`${specs.join('\n')}\n`);
     });
   }
+}
+
+/** Diff options that give the same output whatever git config is around: the grader parses it */
+const STABLE_DIFF = ['--binary', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', '--full-index'];
+
+const COMMIT_IDENTITY: Env = {
+  GIT_AUTHOR_NAME: 'Reneplane',
+  GIT_AUTHOR_EMAIL: 'agent@reneplane.local',
+  GIT_COMMITTER_NAME: 'Reneplane',
+  GIT_COMMITTER_EMAIL: 'agent@reneplane.local',
+};
+
+function isolatedGitEnv(): Env {
+  if (!existsSync(PATHS.gitconfig)) {
+    mkdirSync(dirname(PATHS.gitconfig), { recursive: true });
+    writeFileSync(PATHS.gitconfig, "# Reneplane Local: the agent's own git calls read this instead of ~/.gitconfig (kept empty on purpose)\n");
+  }
+  return {
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: PATHS.gitconfig,
+    LC_ALL: 'C',
+  };
 }

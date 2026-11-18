@@ -1,6 +1,7 @@
 import { createLogger } from '../log.js';
 import { AgentError, type AgentEvent, type MissionOpen, type MissionPlan } from '../protocol.js';
 import { Mission, type MissionOptions } from './mission.js';
+import { GithubSource } from './source.js';
 
 /**
  * One mission runs at a time. Opening another stops the first (its files stay). When no IDE tab has
@@ -42,7 +43,8 @@ export class MissionManager {
     }
     if (!this.active) {
       const attemptId = open.attemptId;
-      this.active = new Mission(open, (event, data) => this.broadcast(attemptId, event, data), this.options);
+      const source = new GithubSource(open.codebank, this.options.dev ? this.options.codebankDir : undefined);
+      this.active = new Mission(open, source, (event, data) => this.broadcast(attemptId, event, data), this.options);
     }
     client.attemptId = open.attemptId;
     this.checkIdle();

@@ -157,6 +157,7 @@ async function dotnet() {
 
 // ---- debug adapters (downloaded the first time a learner starts debugging) ----------------------
 
+const MAVEN = '3.9.16';
 const JS_DEBUG = 'v1.140.1';
 const DEBUGPY = '1.8.22';
 const NETCOREDBG = '3.2.0-1092';
@@ -198,8 +199,16 @@ async function netcoredbg() {
   return { version: NETCOREDBG, platforms };
 }
 
+/** Apache Maven (Apache-2.0), the same zip everywhere: the Java pack puts mvn on PATH, so a session never downloads it */
+async function maven() {
+  const url = `https://archive.apache.org/dist/maven/maven-3/${MAVEN}/binaries/apache-maven-${MAVEN}-bin.zip`;
+  const sha512 = (await text(`${url}.sha512`)).trim().split(/s+/)[0];
+  const platforms = Object.fromEntries(PLATFORMS.map((platform) => [platform, { url, sha512, format: 'zip', strip: `apache-maven-${MAVEN}` }]));
+  return { version: MAVEN, platforms };
+}
+
 // --only=a,b updates just those entries and keeps the rest of the manifest as it is
-const BUILDERS = { node, postgres, git, uv, java, mysql, dotnet, jsdebug, debugpy, netcoredbg };
+const BUILDERS = { node, postgres, git, uv, java, maven, mysql, dotnet, jsdebug, debugpy, netcoredbg };
 const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length).split(',');
 const manifestUrl = new URL('../src/runtimes/manifest.json', import.meta.url);
 const previous = only ? JSON.parse(readFileSync(manifestUrl, 'utf8')) : {};

@@ -68,7 +68,8 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       }
       const body = await readBody(request);
       if (url.pathname === '/control/status') {
-        return json(response, 200, { agent: 'reneplane-local', version: AGENT_VERSION, port, pid: process.pid, mission: manager.current()?.attemptId ?? null });
+        const mission = manager.current();
+        return json(response, 200, { agent: 'reneplane-local', version: AGENT_VERSION, port, pid: process.pid, mission: mission?.attemptId ?? null, packsInUse: mission?.isRunning ? mission.packs() : [] });
       }
       if (url.pathname === '/control/pair') {
         addPendingPairing(String((JSON.parse(body || '{}') as { token?: string }).token ?? ''));

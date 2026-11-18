@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { buildEnv, killTree, type Env } from '../util/process.js';
-import { pickPort } from '../util/ports.js';
+import { pickPort, releasePort } from '../util/ports.js';
 import { DapConnection, DapError, type DebugProtocol } from './dap.js';
 
 /**
@@ -131,6 +131,7 @@ export async function startNodeAdapter(options: {
   });
   server.stderr?.on('data', (chunk: Buffer) => options.onLog(chunk.toString().trim()));
   const parent = await DapConnection.connectTcp(serverPort);
+  releasePort(serverPort);
 
   // js-debug answers the parent attach by asking us to open a child session for the actual target
   let resolveChild!: (child: StartedAdapter) => void;

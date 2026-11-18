@@ -20,7 +20,8 @@ export interface DatabaseConnection {
  *   [migrate + seed into templateConnection()]   when the template is being (re)built
  *   sealTemplate()             → the dev database becomes a copy of the template
  *   query/schema/reset         → while the learner works
- *   stop()                     → everything shut down
+ *   stop()                     → everything shut down (data kept)
+ *   destroy()                  → stopped and deleted
  */
 export interface DatabaseProvider {
   readonly engine: DatabaseEngine;
@@ -48,6 +49,8 @@ export interface DatabaseProvider {
   /** Extra connection-string options for the app (SQL Server's TLS settings) */
   tlsOptions?(): string;
   stop(): Promise<void>;
+  /** Stop and delete everything: local data, a container, or the lease (the session is over) */
+  destroy(): Promise<void>;
 }
 
 /** Make driver values JSON-safe: dates as ISO strings, binary as hex, big numbers as strings */
