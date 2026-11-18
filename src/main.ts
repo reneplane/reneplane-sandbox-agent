@@ -26,6 +26,8 @@ import { formatBytes } from './util/disk.js';
  *   packs              the stack packs and what they use on disk
  *   add <pack…>        install stack packs (e.g. add jdk21-maven mysql84)
  *   remove <pack>      delete a stack pack
+ *   codebank check|compile|init     authoring tools (see src/codebank/cli.ts)
+ *   problem new <ID> --from-commit <sha>
  *   config set <key> <value>
  *   uninstall [--all]  remove start-at-login and the agent (--all: also runtimes and missions)
  *
@@ -267,13 +269,26 @@ async function main(): Promise<void> {
       return;
     }
 
+    case 'codebank': {
+      // Authoring tools: loaded only when used, so the agent itself starts as fast as before
+      const { codebankCommand } = await import('./codebank/cli.js');
+      process.exitCode = await codebankCommand(rest);
+      return;
+    }
+
+    case 'problem': {
+      const { problemCommand } = await import('./codebank/cli.js');
+      process.exitCode = await problemCommand(rest);
+      return;
+    }
+
     case 'version':
     case '--version':
       console.log(AGENT_VERSION);
       return;
 
     default:
-      console.error(`Unknown command "${command}". Commands: start, serve, stop, status, setup, pair, doctor, packs, add, remove, config, uninstall, version`);
+      console.error(`Unknown command "${command}". Commands: start, serve, stop, status, setup, pair, doctor, packs, add, remove, codebank, problem, config, uninstall, version`);
       process.exitCode = 2;
   }
 }

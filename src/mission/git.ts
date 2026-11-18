@@ -57,7 +57,7 @@ export class Git {
    * a path inside the session folder.
    */
   async cloneBundle(bundle: string, tag: string, branch: string, expectedCommit: string): Promise<void> {
-    await this.run(['bundle', 'verify', '--quiet', bundle], { cwd: tmpdir() });
+    // Cloning checks the bundle (`git bundle verify` would need a repository to run in)
     await this.run(['clone', '--quiet', '--no-checkout', '-c', 'core.autocrlf=false', bundle, this.cwd], { cwd: tmpdir(), timeoutMs: 5 * 60_000 });
     const tagged = (await this.run(['rev-parse', `refs/tags/${tag}^{commit}`])).trim();
     if (tagged !== expectedCommit) throw new Error(`The starter bundle's ${tag} is ${tagged}, expected ${expectedCommit}`);
@@ -141,7 +141,8 @@ export class Git {
    */
   async restore(base: string, patch: string): Promise<void> {
     if (!patch.trim()) return;
-    if ((await this.status()).length) throw new Error('The working tree has changes already; restoring needs a fresh checkout');
+    // Untracked output (test reports, build folders) is fine; changed tracked files are not
+    if ((await this.run(['status', '--porcelain', '--untracked-files=no'])).trim()) throw new Error('The working tree has changes already; restoring needs a fresh checkout');
     const dir = mkdtempSync(join(tmpdir(), 'reneplane-restore-'));
     const env = { GIT_INDEX_FILE: join(dir, 'index') };
     try {
