@@ -107,10 +107,13 @@ export class Mission {
     this.workspace = await this.readWorkspace();
     const workspace = this.workspace;
     if (!this.booted) {
-      const taken = new Set<number>();
+      const taken = new Set<number>(Object.values(this.ports).filter((port): port is number => port !== undefined));
       for (const name of ['backend', 'frontend'] as const) {
         const service = workspace.services[name];
-        if (service) {
+        // Ports are picked once per mission: the IDE may plan twice (a reconnect, React's dev double
+        // render), and a second pick after the previous mission freed its ports would leave the IDE's
+        // preview pointing at a port nothing listens on
+        if (service && this.ports[name] === undefined) {
           this.ports[name] = await pickPort(service.port, taken);
           taken.add(this.ports[name]!);
         }
@@ -140,6 +143,7 @@ export class Mission {
       bootSteps: steps,
       preview: preview && this.ports[preview.service] ? { url: `http://localhost:${this.ports[preview.service]}${preview.path}` } : null,
       database: { engine: workspace.database.engine, location: workspace.database.engine === 'sqlserver' ? 'remote' : 'local', label: this.databaseLabel() },
+      debug: workspace.debug && workspace.services.backend ? { adapter: workspace.debug.adapter } : null,
     };
   }
 

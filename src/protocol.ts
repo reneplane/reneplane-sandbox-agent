@@ -63,6 +63,8 @@ export interface MissionPlan {
   bootSteps: BootStep[];
   preview: { url: string } | null;
   database: { engine: DatabaseEngine; location: 'local' | 'remote'; label: string };
+  /** Backend debugging, when the codebank supports it */
+  debug: { adapter: 'node' | 'python' | 'java' | 'dotnet' } | null;
 }
 
 export type ServiceState = 'starting' | 'running' | 'stopped' | 'error';
