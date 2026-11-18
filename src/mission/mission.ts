@@ -314,7 +314,8 @@ export class Mission {
       return new RemoteMssql(
         process.env.RENEPLANE_POOL_URL ?? 'https://reneplane-mssql-pool.reneplane.workers.dev',
         () => loadConfig().deviceToken,
-        { attemptId, missionId, variantId, codebank },
+        // The template script the pool loads, from workspace.yaml (SHOP-163 keeps it per engine)
+        { attemptId, missionId, variantId, codebank: { ...codebank, template: this.workspace!.database.template ?? 'db/template.sqlserver.sql' } },
         () => this.watched,
       );
     }

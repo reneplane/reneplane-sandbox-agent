@@ -182,7 +182,7 @@ export class RemoteMssql extends SqlServerBase implements DatabaseProvider {
   constructor(
     private readonly poolUrl: string,
     private readonly deviceToken: () => string | null,
-    private readonly lease: { attemptId: string; missionId: string; variantId: string; codebank: { repo: string; ref: string } },
+    private readonly lease: { attemptId: string; missionId: string; variantId: string; codebank: { repo: string; ref: string; template: string } },
     private readonly ideConnected: () => boolean,
   ) {
     super();
