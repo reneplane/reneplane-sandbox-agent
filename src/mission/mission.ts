@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig, PATHS } from '../config.js';
 import { DockerMssql, RemoteMssql } from '../db/mssql.js';
@@ -11,20 +11,22 @@ import {
   AgentError,
   type AgentEvent,
   type BootStep,
+  type Codebank,
   type LogEvent,
-  type MissionOpen,
   type MissionPlan,
   type RunResult,
 } from '../protocol.js';
 import { ensureRuntime, isInstalled, LABELS, type Runtime, type RuntimeName } from '../runtimes/index.js';
+import { packsFor, runtimesFor, type PackId } from '../packs/index.js';
 import { randomToken } from '../security.js';
 import { resolveInside } from '../util/paths.js';
-import { pickPort } from '../util/ports.js';
+import { pickPort, releasePort } from '../util/ports.js';
 import { buildEnv, runCommand, type Env } from '../util/process.js';
 import { Debugger, type DebugCommand } from '../debug/session.js';
 import { MissionFiles } from './files.js';
 import { Git } from './git.js';
 import { Services } from './services.js';
+import type { MissionSource } from './source.js';
 import { Terminals } from './terminal.js';
 import { runTests } from './tests.js';
 import { parseWorkspace, render, renderEnv, shellCommand, type Vars, type WorkspaceFile } from './workspace.js';
@@ -32,8 +34,9 @@ import { parseWorkspace, render, renderEnv, shellCommand, type Vars, type Worksp
 /**
  * One learner's attempt at one mission, on this computer.
  *
- *   ~/.reneplane/missions/<attemptId>/
+ *   <root>/<attemptId>/           root: ~/.reneplane/missions (or a checker's temp folder)
  *     repo/         the learner's working tree (a real git clone)
+ *     bundle/       the starter bundle, unpacked (bundle sources only)
  *     db/           the mission's database server data
  *     out/          test reports from the last run
  *     state.json    what has been set up already, and the database passwords
@@ -41,11 +44,22 @@ import { parseWorkspace, render, renderEnv, shellCommand, type Vars, type Worksp
 
 const log = createLogger('mission');
 
+/** Which attempt this is, whatever its files come from */
+export interface MissionIdentity {
+  attemptId: string;
+  missionId: string;
+  variantId: string;
+}
+
 interface MissionState {
-  open: MissionOpen;
+  /** Agents up to 0.2 also saved `codebank` here */
+  open: MissionIdentity & { codebank?: Codebank };
+  sourceKey?: string;
   createdAt: string;
   cloned: boolean;
   templateReady: boolean;
+  /** The saved diff was put back on the starter (resumed sessions) */
+  restored?: boolean;
   secrets: { superPassword: string; password: string };
   setupHashes: Record<string, string>;
 }
@@ -54,11 +68,18 @@ export interface MissionOptions {
   dev: boolean;
   /** Dev only: clone reneplane/codebank-x from <dir>/codebank-x instead of GitHub */
   codebankDir?: string;
+  /** Where mission folders go (default ~/.reneplane/missions) */
+  root?: string;
+  /** Watch the working tree for changes (the IDE's live file view); the checker turns it off */
+  watchFiles?: boolean;
+  /** Where SQL Server comes from: the Azure pool (learners) or Docker Express (codebank checks, dev) */
+  mssql?: 'pool' | 'docker';
 }
 
 export class Mission {
   readonly dir: string;
   readonly repoDir: string;
+  private readonly identity: MissionIdentity;
   private state: MissionState;
   private workspace: WorkspaceFile | null = null;
   private git: Git | null = null;
@@ -77,14 +98,18 @@ export class Mission {
   watched = true;
 
   constructor(
-    open: MissionOpen,
+    identity: MissionIdentity,
+    private readonly source: MissionSource,
     private readonly emit: (event: AgentEvent, data: unknown) => void,
     private readonly options: MissionOptions,
+    /** A saved diff to put back on the starter once (a resumed session, or the checker's reference) */
+    private readonly startingPatch: string | null = null,
   ) {
-    this.dir = join(PATHS.missions, open.attemptId);
+    this.identity = { attemptId: identity.attemptId, missionId: identity.missionId, variantId: identity.variantId };
+    this.dir = join(options.root ?? PATHS.missions, identity.attemptId);
     this.repoDir = join(this.dir, 'repo');
     mkdirSync(this.dir, { recursive: true });
-    this.state = this.loadState(open);
+    this.state = this.loadState();
     this.services = new Services(
       (services) => this.emit('services.change', services),
       (entry) => this.log(entry),
@@ -97,7 +122,12 @@ export class Mission {
   }
 
   get attemptId(): string {
-    return this.state.open.attemptId;
+    return this.identity.attemptId;
+  }
+
+  /** The commit the learner started from */
+  get baseRef(): string {
+    return this.source.baseRef;
   }
 
   // ---- planning and booting -----------------------------------------------------------------------
@@ -131,6 +161,7 @@ export class Mission {
     workspace.setup.forEach((step, index) => steps.push({ id: `setup:${index}`, label: step.name }));
     steps.push({ id: 'database', label: `Starting ${this.databaseLabel()}` });
     steps.push({ id: 'template', label: this.state.templateReady ? 'Restoring your database' : 'Loading the template database' });
+    if (this.needsRestore()) steps.push({ id: 'restore', label: 'Restoring your saved work' });
     for (const name of ['backend', 'frontend'] as const) {
       const service = workspace.services[name];
       if (service) steps.push({ id: `service:${name}`, label: `Starting the ${name}`, detail: `${service.label} on localhost:${this.ports[name]}` });
@@ -180,10 +211,12 @@ export class Mission {
         this.workspace = await this.workspaceAtRef();
       });
       this.files = new MissionFiles(this.repoDir, this.git!);
-      this.files.watch((path, content) => {
-        this.emit('fs.change', { path, content });
-        this.onFileChanged(path);
-      });
+      if (this.options.watchFiles !== false) {
+        this.files.watch((path, content) => {
+          this.emit('fs.change', { path, content });
+          this.onFileChanged(path);
+        });
+      }
 
       for (const [index, setup] of workspace.setup.entries()) {
         await step(`setup:${index}`, () => this.runSetup(setup));
@@ -195,7 +228,9 @@ export class Mission {
         const { port, host } = this.db.connection();
         this.services.setState('database', 'running', `${host === '127.0.0.1' ? 'localhost' : host}:${port}`);
       });
+      // The template always comes from the starter's own migrations and seed, never the saved work
       await step('template', () => this.prepareDatabase());
+      if (this.needsRestore()) await step('restore', () => this.restoreSavedWork());
       for (const name of ['backend', 'frontend'] as const) {
         if (workspace.services[name]) await step(`service:${name}`, () => this.startService(name));
       }
@@ -208,16 +243,13 @@ export class Mission {
     }
   }
 
+  /** The packs this workspace needs (what the IDE shows as the variant's requirements) */
+  packs(): PackId[] {
+    return this.workspace ? packsFor(this.workspace) : [];
+  }
+
   private neededRuntimes(): RuntimeName[] {
-    const workspace = this.workspace!;
-    const names: RuntimeName[] = ['git'];
-    if (workspace.runtimes.node || workspace.services.frontend) names.push('node');
-    if (workspace.runtimes.python) names.push('uv');
-    if (workspace.runtimes.java) names.push('java');
-    if (workspace.runtimes.dotnet) names.push('dotnet');
-    if (workspace.database.engine === 'postgres') names.push('postgres');
-    if (workspace.database.engine === 'mysql') names.push('mysql');
-    return names;
+    return runtimesFor(packsFor(this.workspace!));
   }
 
   private async ensureClone(): Promise<void> {
@@ -225,10 +257,30 @@ export class Mission {
     this.runtimes.set('git', git);
     this.git = new Git(git, this.repoDir);
     if (this.state.cloned && existsSync(join(this.repoDir, '.git'))) return;
-    const { repo, ref } = this.state.open.codebank;
-    const source = this.options.dev && this.options.codebankDir ? join(this.options.codebankDir, repo.split('/')[1]!) : `https://github.com/${repo}.git`;
-    await this.git.clone(source, ref, this.workspace!.branch);
+    // A half-finished clone from an interrupted boot would make the next one fail
+    rmSync(this.repoDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    await this.source.materialise(this.git, this.workspace!.branch);
     this.updateState({ cloned: true });
+  }
+
+  private needsRestore(): boolean {
+    return Boolean(this.startingPatch?.trim()) && !this.state.restored;
+  }
+
+  /**
+   * Put the saved diff back, then apply the learner's migrations to the freshly built database. A
+   * migration that fails doesn't stop the boot: the learner sees why in the Database panel and fixes it.
+   */
+  private async restoreSavedWork(): Promise<void> {
+    await this.requireGit().restore(this.source.baseRef, this.startingPatch!);
+    this.updateState({ restored: true });
+    this.log({ source: 'runner', level: 'info', message: 'restored your saved work' });
+    try {
+      const applied = await this.migrate();
+      if (applied.length) this.log({ source: 'database', level: 'warn', message: 'database rebuilt from the starter; your migrations were applied again' });
+    } catch (error) {
+      this.log({ source: 'database', level: 'error', message: `your migrations didn't apply to the rebuilt database: ${(error as Error).message}` });
+    }
   }
 
   /** Install dependencies, unless the lockfiles are unchanged since the last successful install */
@@ -274,10 +326,10 @@ export class Mission {
         if (result.code !== 0) throw new Error(`The starting migrations failed:\n${result.output.slice(-15).join('\n')}`);
       } else if (workspace.database.schema) {
         // SQL practice problems: a plain schema file instead of a migration tool
-        await db.runScript(await this.git!.show(this.state.open.codebank.ref, workspace.database.schema), template.name);
+        await db.runScript(await this.git!.show(this.source.baseRef, workspace.database.schema), template.name);
       }
       if (workspace.database.seed) {
-        await db.runScript(await this.git!.show(this.state.open.codebank.ref, workspace.database.seed), template.name);
+        await db.runScript(await this.git!.show(this.source.baseRef, workspace.database.seed), template.name);
       }
       this.updateState({ templateReady: true });
       this.log({ source: 'database', level: 'info', message: 'template database built (schema + seed)' });
@@ -305,21 +357,32 @@ export class Mission {
     if (engine === 'postgres') return new LocalPostgres(join(this.dir, 'db', 'postgres'), name, this.state.secrets);
     if (engine === 'mysql') return new LocalMysql(join(this.dir, 'db', 'mysql'), name, this.state.secrets);
     if (engine === 'sqlserver') {
-      const template = this.workspace!.database.template;
-      if (!template) throw new AgentError('database_unavailable', 'This codebank has no SQL Server template script');
-      if (this.options.dev && process.env.RENEPLANE_MSSQL === 'docker') {
-        return new DockerMssql(this.attemptId, name, () => this.git!.show(this.state.open.codebank.ref, template), this.state.secrets);
+      const templatePath = this.workspace!.database.template ?? 'db/template.sqlserver.sql';
+      if (this.mssqlMode() === 'docker') {
+        return new DockerMssql(this.attemptId, name, () => this.sqlServerTemplate(templatePath), this.state.secrets);
       }
-      const { attemptId, missionId, variantId, codebank } = this.state.open;
       return new RemoteMssql(
         process.env.RENEPLANE_POOL_URL ?? 'https://reneplane-mssql-pool.reneplane.workers.dev',
         () => loadConfig().deviceToken,
-        // The template script the pool loads, from workspace.yaml (SHOP-163 keeps it per engine)
-        { attemptId, missionId, variantId, codebank: { ...codebank, template: this.workspace!.database.template ?? 'db/template.sqlserver.sql' } },
+        // How the pool finds the template it loads: a codebank path (0.2) or the engine's signed reference
+        { ...this.identity, ...this.source.leaseTemplate(templatePath) },
         () => this.watched,
       );
     }
     throw new AgentError('database_unavailable', `${engine} isn't supported by this version of Reneplane Local yet`);
+  }
+
+  private mssqlMode(): 'pool' | 'docker' {
+    return this.options.mssql ?? (this.options.dev && process.env.RENEPLANE_MSSQL === 'docker' ? 'docker' : 'pool');
+  }
+
+  /** The SQL Server template: a compiled bundle carries it next to the repo; older codebanks commit it */
+  private async sqlServerTemplate(path: string): Promise<string> {
+    const fromSource = await this.source.template?.();
+    if (fromSource) return fromSource;
+    return this.git!.show(this.source.baseRef, path).catch(() => {
+      throw new AgentError('database_unavailable', `This codebank has no SQL Server template (${path})`);
+    });
   }
 
   private databaseLabel(): string {
@@ -378,7 +441,7 @@ export class Mission {
       ...workspaceEnv,
       npm_config_cache: join(PATHS.cache, 'npm'),
       // Otherwise npm.cmd hands over to a globally installed npm (whatever version the learner has)
-      npm_config_prefix: join(PATHS.cache, 'npm-global'),
+      npm_config_prefix: join(PATHS.state, 'npm-global'),
       npm_config_update_notifier: 'false',
       npm_config_fund: 'false',
       npm_config_audit: 'false',
@@ -398,7 +461,7 @@ export class Mission {
   }
 
   async original(): Promise<Record<string, string>> {
-    return this.requireFiles().original(this.state.open.codebank.ref);
+    return this.requireFiles().original(this.source.baseRef);
   }
 
   writeFile(path: string, content: string): void {
@@ -553,7 +616,7 @@ export class Mission {
     return commit;
   }
   async gitDiff() {
-    return this.requireGit().diffSince(this.state.open.codebank.ref);
+    return this.requireGit().diffSince(this.source.baseRef);
   }
   private requireGit(): Git {
     if (!this.git) throw new AgentError('no_mission', 'The mission is still starting');
@@ -614,19 +677,35 @@ export class Mission {
     this.services.setState('database', 'stopped');
   }
 
+  /**
+   * Stop everything and delete it: the database (local data, the Docker container, or the SQL Server
+   * lease), the ports and the whole mission folder. Deleting retries for a few seconds because Windows
+   * keeps files locked briefly after a process exits.
+   */
+  async dispose(): Promise<void> {
+    await this.suspend();
+    await this.db?.destroy().catch((error) => log.warn('Database cleanup failed', error));
+    this.db = null;
+    for (const port of Object.values(this.ports)) if (port !== undefined) releasePort(port);
+    this.ports = {};
+    rmSync(this.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+  }
+
   // ---- state --------------------------------------------------------------------------------------
 
-  private loadState(open: MissionOpen): MissionState {
+  private loadState(): MissionState {
     const file = join(this.dir, 'state.json');
     if (existsSync(file)) {
       const saved = JSON.parse(readFileSync(file, 'utf8')) as MissionState;
-      if (saved.open.codebank.repo !== open.codebank.repo || saved.open.codebank.ref !== open.codebank.ref) {
+      const savedKey = saved.sourceKey ?? (saved.open.codebank ? `github:${saved.open.codebank.repo}@${saved.open.codebank.ref}` : null);
+      if (savedKey !== this.source.key) {
         throw new AgentError('mission_busy', 'This attempt already uses a different codebank on this computer');
       }
       return saved;
     }
     const fresh: MissionState = {
-      open,
+      open: this.identity,
+      sourceKey: this.source.key,
       createdAt: new Date().toISOString(),
       cloned: false,
       templateReady: false,
@@ -644,21 +723,19 @@ export class Mission {
 
   /** A repo with several variants (SQL practice: one per engine) has .reneplane/<variantId>.yaml */
   private workspaceCandidates(): string[] {
-    return [`.reneplane/${this.state.open.variantId}.yaml`, '.reneplane/workspace.yaml'];
+    return [`.reneplane/${this.identity.variantId}.yaml`, '.reneplane/workspace.yaml'];
   }
 
-  /** The workspace file from the pinned commit (never the working tree) */
+  /** The workspace file from the starting commit (never the working tree, which the learner can edit) */
   private async workspaceAtRef(): Promise<WorkspaceFile> {
-    const ref = this.state.open.codebank.ref;
     for (const path of this.workspaceCandidates()) {
-      const text = await this.git!.show(ref, path).catch(() => null);
+      const text = await this.git!.show(this.source.baseRef, path).catch(() => null);
       if (text !== null) return parseWorkspace(text);
     }
     throw new AgentError('failed', 'This codebank has no workspace file for this mission');
   }
 
   private async readWorkspace(): Promise<WorkspaceFile> {
-    const { repo, ref } = this.state.open.codebank;
     if (this.state.cloned && existsSync(join(this.repoDir, '.git'))) {
       if (!this.git) {
         const git = await ensureRuntime('git');
@@ -667,19 +744,7 @@ export class Mission {
       }
       return this.workspaceAtRef();
     }
-    for (const path of this.workspaceCandidates()) {
-      if (this.options.dev && this.options.codebankDir) {
-        const file = join(this.options.codebankDir, repo.split('/')[1]!, ...path.split('/'));
-        if (existsSync(file)) return parseWorkspace(readFileSync(file, 'utf8'));
-        continue;
-      }
-      const response = await fetch(`https://raw.githubusercontent.com/${repo}/${encodeURIComponent(ref)}/${path}`, {
-        signal: AbortSignal.timeout(20_000),
-      });
-      if (response.ok) return parseWorkspace(await response.text());
-      if (response.status !== 404) throw new AgentError('failed', `Couldn't read ${repo}@${ref} (${response.status}). Check your internet connection.`);
-    }
-    throw new AgentError('failed', `${repo}@${ref} has no workspace file for this mission`);
+    return parseWorkspace(await this.source.workspaceText(this.workspaceCandidates()));
   }
 
   private log(entry: LogEvent): void {

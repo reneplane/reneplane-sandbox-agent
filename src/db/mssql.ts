@@ -3,6 +3,7 @@ import { createLogger } from '../log.js';
 import { AgentError, type QueryResult, type TableInfo } from '../protocol.js';
 import { randomToken } from '../security.js';
 import { pickPort } from '../util/ports.js';
+import type { LeaseTemplate } from '../mission/source.js';
 import { runFile } from '../util/process.js';
 import { commandOf, plainRows, type DatabaseConnection, type DatabaseProvider } from './types.js';
 
@@ -182,7 +183,7 @@ export class RemoteMssql extends SqlServerBase implements DatabaseProvider {
   constructor(
     private readonly poolUrl: string,
     private readonly deviceToken: () => string | null,
-    private readonly lease: { attemptId: string; missionId: string; variantId: string; codebank: { repo: string; ref: string; template: string } },
+    private readonly lease: { attemptId: string; missionId: string; variantId: string } & LeaseTemplate,
     private readonly ideConnected: () => boolean,
   ) {
     super();
@@ -233,6 +234,11 @@ export class RemoteMssql extends SqlServerBase implements DatabaseProvider {
     this.target = null;
   }
 
+  /** Releasing the lease is all there is: the pool wipes the database and revokes the password */
+  async destroy(): Promise<void> {
+    await this.stop();
+  }
+
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
     let response: Response;
     try {
@@ -278,7 +284,7 @@ export class DockerMssql extends SqlServerBase implements DatabaseProvider {
     if (existing.code !== 0) {
       port = await pickPort(14339);
       onProgress?.('Starting the SQL Server container (downloads 1.5 GB the first time)');
-      const created = await runFile('docker', ['run', '-d', '--name', this.container, '-e', 'ACCEPT_EULA=Y', '-e', 'MSSQL_PID=Express', '-e', `MSSQL_SA_PASSWORD=${saPassword}`, '-p', `127.0.0.1:${port}:1433`, 'mcr.microsoft.com/mssql/server:2022-latest'], { timeoutMs: 30 * 60_000 });
+      const created = await runFile('docker', ['run', '-d', '--name', this.container, '-e', 'ACCEPT_EULA=Y', '-e', 'MSSQL_PID=Express', '-e', `MSSQL_SA_PASSWORD=${saPassword}`, '-p', `127.0.0.1:${port}:1433`, MSSQL_IMAGE], { timeoutMs: 30 * 60_000 });
       if (created.code !== 0) throw new AgentError('database_unavailable', `Docker couldn't start SQL Server: ${created.stderr.trim()}`);
     } else {
       await runFile('docker', ['start', this.container]);
@@ -323,6 +329,10 @@ export class DockerMssql extends SqlServerBase implements DatabaseProvider {
       ALTER ROLE db_datareader ADD MEMBER [${this.name}];
       ALTER ROLE db_datawriter ADD MEMBER [${this.name}];
       GRANT EXECUTE, VIEW DEFINITION, SHOWPLAN, REFERENCES TO [${this.name}];`);
+    // The template loads as the restricted user, as the pool does it: a template that needs more rights
+    // than a learner has fails here, in the checker, not on a learner's lease
+    await this.idle();
+    this.target = { ...this.target!, user: this.name, password: this.secrets.password, database: this.name };
     await this.runScript(await this.loadTemplate());
     await this.idle();
   }
@@ -336,7 +346,15 @@ export class DockerMssql extends SqlServerBase implements DatabaseProvider {
     await this.idle();
     await runFile('docker', ['stop', this.container], { timeoutMs: 60_000 });
   }
+
+  async destroy(): Promise<void> {
+    await this.idle();
+    await runFile('docker', ['rm', '-f', this.container], { timeoutMs: 60_000 });
+  }
 }
+
+/** The same image the grader uses, so a template that loads here loads there */
+export const MSSQL_IMAGE = 'mcr.microsoft.com/mssql/server:2022-CU28-ubuntu-22.04';
 
 export function newLeasePassword(): string {
   return `Rp1!${randomToken(24)}`;

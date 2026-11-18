@@ -10,13 +10,26 @@ export function isPortFree(port: number): Promise<boolean> {
   });
 }
 
-/** The preferred port if it's free, otherwise the next free one above it */
+/**
+ * Ports this process handed out and hasn't released. A port is free to the OS until its program binds
+ * it, so two missions (the checker runs several) could otherwise both be given the same one.
+ */
+const reserved = new Set<number>();
+
+/** The preferred port if it's free, otherwise the next free one above it. It stays reserved until released. */
 export async function pickPort(preferred: number, avoid: Set<number> = new Set(), attempts = 50): Promise<number> {
   for (let port = preferred; port < preferred + attempts; port += 1) {
-    if (avoid.has(port)) continue;
-    if (await isPortFree(port)) return port;
+    if (avoid.has(port) || reserved.has(port)) continue;
+    if (await isPortFree(port)) {
+      reserved.add(port);
+      return port;
+    }
   }
   throw new Error(`No free port found near ${preferred}`);
+}
+
+export function releasePort(port: number): void {
+  reserved.delete(port);
 }
 
 /** Wait until an HTTP endpoint answers (any status below 500 counts as up) */

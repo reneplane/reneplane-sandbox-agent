@@ -5,7 +5,7 @@ import type { WorkspaceFile } from '../mission/workspace.js';
 import { render, renderEnv, shellCommand, type Vars } from '../mission/workspace.js';
 import type { Services } from '../mission/services.js';
 import { ensureRuntime, type Runtime } from '../runtimes/index.js';
-import { pickPort, waitForHttp } from '../util/ports.js';
+import { pickPort, releasePort, waitForHttp } from '../util/ports.js';
 import { runCommand, type Env } from '../util/process.js';
 import { startDotnetAdapter, startNodeAdapter, startPythonAdapter, handshake, setFileBreakpoints, type BreakpointResult, type FileBreakpoints, type StartedAdapter } from './adapters.js';
 import { JavaDebugBridge } from './java.js';
@@ -152,6 +152,8 @@ export class Debugger {
         this.host.runtimes.set(runtimeName, adapterRuntime);
       }
       const port = config.adapter === 'dotnet' ? 0 : await pickPort(DEFAULT_PORTS[config.adapter], new Set([this.host.backendPort]));
+      // Only this mission's debug run uses it; keeping it reserved would move the port on every restart
+      if (port) releasePort(port);
       const vars: Vars = { ...this.host.vars(), 'ports.debug': port };
       const backend = this.host.workspace.services.backend!;
       const cwd = join(this.host.repoDir, config.cwd ?? backend.cwd);

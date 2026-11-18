@@ -139,6 +139,35 @@
       }
     }
   },
+  "maven": {
+    "version": "3.9.16",
+    "platforms": {
+      "win32-x64": {
+        "url": "https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.zip",
+        "sha512": "ed41650d42485cfc243fad22158caf9cbb5dc408ce7a09ddb94dd42a019de929ca43065bfa450612cf12bf78b5cafa3884b96c090de326ff590448c933454af3",
+        "format": "zip",
+        "strip": "apache-maven-3.9.16"
+      },
+      "linux-x64": {
+        "url": "https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.zip",
+        "sha512": "ed41650d42485cfc243fad22158caf9cbb5dc408ce7a09ddb94dd42a019de929ca43065bfa450612cf12bf78b5cafa3884b96c090de326ff590448c933454af3",
+        "format": "zip",
+        "strip": "apache-maven-3.9.16"
+      },
+      "darwin-arm64": {
+        "url": "https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.zip",
+        "sha512": "ed41650d42485cfc243fad22158caf9cbb5dc408ce7a09ddb94dd42a019de929ca43065bfa450612cf12bf78b5cafa3884b96c090de326ff590448c933454af3",
+        "format": "zip",
+        "strip": "apache-maven-3.9.16"
+      },
+      "darwin-x64": {
+        "url": "https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.zip",
+        "sha512": "ed41650d42485cfc243fad22158caf9cbb5dc408ce7a09ddb94dd42a019de929ca43065bfa450612cf12bf78b5cafa3884b96c090de326ff590448c933454af3",
+        "format": "zip",
+        "strip": "apache-maven-3.9.16"
+      }
+    }
+  },
   "mysql": {
     "version": "8.4.13",
     "platforms": {

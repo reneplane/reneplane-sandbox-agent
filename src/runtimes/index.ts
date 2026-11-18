@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PATHS } from '../config.js';
 import { createLogger } from '../log.js';
@@ -39,6 +39,7 @@ export const LABELS: Record<RuntimeName, string> = {
   git: 'Git',
   uv: 'Python (uv)',
   java: 'Java (Temurin JDK)',
+  maven: 'Maven',
   mysql: 'MySQL',
   dotnet: '.NET SDK',
   jsdebug: 'JavaScript debugger',
@@ -61,12 +62,22 @@ function entry(name: RuntimeName): PlatformEntry {
   return found;
 }
 
+/** Where a runtime is (or would be) unpacked */
+export function runtimeDir(name: RuntimeName): string {
+  return dirOf(name);
+}
+
 function dirOf(name: RuntimeName): string {
   return join(PATHS.runtimes, `${name}-${runtimeVersion(name)}`);
 }
 
 export function isInstalled(name: RuntimeName): boolean {
   return existsSync(join(dirOf(name), '.complete'));
+}
+
+/** Available for this computer at all (some runtimes have no build for Intel Macs) */
+export function isAvailable(name: RuntimeName): boolean {
+  return Boolean((manifest[name].platforms as Record<string, PlatformEntry>)[platformKey()]);
 }
 
 const installing = new Map<RuntimeName, Promise<Runtime>>();
@@ -76,12 +87,14 @@ export function ensureRuntime(name: RuntimeName, onProgress?: (detail: string) =
   if (isInstalled(name)) return Promise.resolve(describe(name));
   const pending = installing.get(name);
   if (pending) return pending;
-  const work = install(name, onProgress).finally(() => installing.delete(name));
+  const work = withInstallLock(name, () => install(name, onProgress), onProgress).finally(() => installing.delete(name));
   installing.set(name, work);
   return work;
 }
 
 async function install(name: RuntimeName, onProgress?: (detail: string) => void): Promise<Runtime> {
+  // Another process may have finished it while this one waited for the lock
+  if (isInstalled(name)) return describe(name);
   const platform = entry(name);
   const dir = dirOf(name);
   const archive = join(PATHS.downloads, platform.url.split('/').pop()!);
@@ -91,8 +104,67 @@ async function install(name: RuntimeName, onProgress?: (detail: string) => void)
   onProgress?.('Unpacking');
   await unpack(archive, dir, platform.format, platform.strip);
   writeFileSync(join(dir, '.complete'), new Date().toISOString());
+  // The archive has done its job: keeping it would double the runtime's size on disk
+  rmSync(archive, { force: true });
   log.info(`Installed ${name} into ${dir}`);
   return describe(name);
+}
+
+/**
+ * One install of a runtime at a time across processes (the agent and a `reneplane-local add` in a
+ * terminal): unpacking replaces a staging folder the other would be using. The lock is a folder,
+ * created atomically; one older than 20 minutes belongs to a process that died, and is taken over.
+ */
+async function withInstallLock<T>(name: RuntimeName, work: () => Promise<T>, onProgress?: (detail: string) => void): Promise<T> {
+  const lock = `${dirOf(name)}.lock`;
+  mkdirSync(PATHS.runtimes, { recursive: true });
+  for (let waited = 0; ; waited += 1) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch {
+      const age = Date.now() - (statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
+      if (age > 20 * 60_000) {
+        rmSync(lock, { recursive: true, force: true });
+        continue;
+      }
+      if (waited === 0) onProgress?.('Waiting for another download of the same runtime');
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  try {
+    return await work();
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Delete what an update left behind: runtime versions the manifest no longer lists, leftover archives
+ * and half-unpacked folders. Runs at agent start, before any mission uses a runtime. `python` is uv's
+ * interpreter folder (the Python pack), not a manifest runtime, so it stays.
+ */
+export function pruneRuntimes(): string[] {
+  const names = Object.keys(manifest) as RuntimeName[];
+  const keep = new Set(names.map((name) => `${name}-${runtimeVersion(name)}`));
+  const removed: string[] = [];
+  for (const item of existsSync(PATHS.runtimes) ? readdirSync(PATHS.runtimes) : []) {
+    if (item === 'python' || item === '.downloads' || keep.has(item) || item.endsWith('.lock')) continue;
+    const stale = item.endsWith('.unpacking') || names.some((name) => item.startsWith(`${name}-`));
+    if (!stale) continue;
+    try {
+      rmSync(join(PATHS.runtimes, item), { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      removed.push(item);
+    } catch (error) {
+      log.warn(`Could not remove the old runtime ${item}; is it still in use?`, error);
+    }
+  }
+  for (const file of existsSync(PATHS.downloads) ? readdirSync(PATHS.downloads) : []) {
+    rmSync(join(PATHS.downloads, file), { recursive: true, force: true });
+    removed.push(`.downloads/${file}`);
+  }
+  if (removed.length) log.info(`Removed ${removed.length} leftover runtime files: ${removed.join(', ')}`);
+  return removed;
 }
 
 function describe(name: RuntimeName): Runtime {
@@ -130,12 +202,15 @@ function describe(name: RuntimeName): Runtime {
         path: [join(home, 'bin')],
         env: {
           JAVA_HOME: home,
-          // Maven (through each codebank's mvnw) and its repository, shared by every mission
-          MAVEN_USER_HOME: join(PATHS.cache, 'maven'),
+          // Maven's own files (a codebank's mvnw keeps its download here) are tool state, never evicted;
+          // the repository of downloaded libraries is the shared, capped cache
+          MAVEN_USER_HOME: join(PATHS.state, 'maven'),
           MAVEN_OPTS: `-Dmaven.repo.local=${join(PATHS.cache, 'm2')}`,
         },
       };
     }
+    case 'maven':
+      return { name, version, dir, path: [join(dir, 'bin')], env: { MAVEN_HOME: dir } };
     case 'mysql':
       return { name, version, dir, path: [join(dir, 'bin')], env: {} };
     case 'dotnet':
@@ -146,12 +221,17 @@ function describe(name: RuntimeName): Runtime {
         path: [dir],
         env: {
           DOTNET_ROOT: dir,
-          DOTNET_CLI_HOME: join(PATHS.cache, 'dotnet-home'),
+          DOTNET_CLI_HOME: join(PATHS.state, 'dotnet-home'),
           NUGET_PACKAGES: join(PATHS.cache, 'nuget'),
           DOTNET_CLI_TELEMETRY_OPTOUT: '1',
           DOTNET_NOLOGO: '1',
           DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1',
           DOTNET_MULTILEVEL_LOOKUP: '0',
+          // No build servers left running after a command: they keep bin/ and obj/ locked, and a
+          // session folder must be deletable the moment the session ends
+          MSBUILDDISABLENODEREUSE: '1',
+          DOTNET_CLI_USE_MSBUILD_SERVER: '0',
+          UseSharedCompilation: 'false',
         },
       };
     // Debug adapters: started by the agent itself, nothing goes on the mission's PATH

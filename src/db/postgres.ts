@@ -4,7 +4,7 @@ import pg from 'pg';
 import { createLogger } from '../log.js';
 import type { QueryResult, TableInfo } from '../protocol.js';
 import { ensureRuntime, type Runtime } from '../runtimes/index.js';
-import { pickPort } from '../util/ports.js';
+import { pickPort, releasePort } from '../util/ports.js';
 import { buildEnv, runFile } from '../util/process.js';
 import { commandOf, plainRows, type DatabaseConnection, type DatabaseProvider } from './types.js';
 
@@ -230,6 +230,12 @@ export class LocalPostgres implements DatabaseProvider {
     if (this.runtime && existsSync(join(this.dataDir, 'postmaster.pid'))) {
       await this.pgCtl(['stop', '-D', this.dataDir, '-m', 'fast', '-w', '-t', '30']);
     }
+    releasePort(this.port);
+  }
+
+  async destroy(): Promise<void> {
+    await this.stop().catch(() => undefined);
+    rmSync(this.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
   }
 
   // ---- helpers ------------------------------------------------------------------------------------

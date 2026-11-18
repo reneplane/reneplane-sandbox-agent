@@ -4,7 +4,7 @@ import mysql from 'mysql2/promise';
 import { createLogger } from '../log.js';
 import type { QueryResult, TableInfo } from '../protocol.js';
 import { ensureRuntime, type Runtime } from '../runtimes/index.js';
-import { pickPort } from '../util/ports.js';
+import { pickPort, releasePort } from '../util/ports.js';
 import { buildEnv, runFile, startCommand, type Spawned } from '../util/process.js';
 import { commandOf, plainRows, type DatabaseConnection, type DatabaseProvider } from './types.js';
 
@@ -269,6 +269,12 @@ table_open_cache=200
     }
     await this.server.kill();
     this.server = null;
+    releasePort(this.port);
+  }
+
+  async destroy(): Promise<void> {
+    await this.stop().catch(() => undefined);
+    rmSync(this.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
   }
 
   // ---- helpers ------------------------------------------------------------------------------------

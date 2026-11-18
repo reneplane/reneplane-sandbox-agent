@@ -24,10 +24,17 @@ export const PATHS = {
   bin: join(HOME, 'bin'),
   runtimes: join(HOME, 'runtimes'),
   downloads: join(HOME, 'runtimes', '.downloads'),
+  /** Public packages only (npm, uv, Maven, NuGet): capped, evicted per ecosystem */
   cache: join(HOME, 'cache'),
+  /** Starter bundles by sha256 (a few MB each), so reopening a session doesn't download again */
+  bundles: join(HOME, 'cache', 'bundles'),
+  /** Tool state a pack needs and the cache cap must never evict (npm's prefix, the .NET CLI home, Maven's wrapper) */
+  state: join(HOME, 'state'),
   missions: join(HOME, 'missions'),
   logs: join(HOME, 'logs'),
   config: join(HOME, 'config.json'),
+  /** The agent's own git calls read this instead of the learner's ~/.gitconfig */
+  gitconfig: join(HOME, 'gitconfig'),
 };
 
 export const DEFAULT_PORTS = [47811, 47812, 47813];

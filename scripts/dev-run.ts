@@ -1,6 +1,6 @@
 // Dev helper: copy a fix into a running mission's working tree (optional), then run its visible tests.
 //   RENEPLANE_HOME=~/.reneplane-dev npx tsx scripts/dev-run.ts <attemptId> <repo> <ref> [fixDir]
-import { cpSync, readdirSync } from 'node:fs';
+import { cpSync, readdirSync, statSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import WebSocket from 'ws';
 import { PATHS } from '../src/config.js';
@@ -41,6 +41,13 @@ await call('mission.boot', { attemptId });
 if (fixDir) {
   const target = join(PATHS.missions, attemptId, 'repo');
   for (const entry of readdirSync(fixDir)) cpSync(join(fixDir, entry), join(target, entry), { recursive: true });
+  // Copies can keep the source's old timestamps; incremental builds (Maven, MSBuild) would then skip them
+  const now = new Date();
+  const touch = (rel: string) =>
+    readdirSync(join(fixDir, rel)).forEach((name) =>
+      statSync(join(fixDir, rel, name)).isDirectory() ? touch(join(rel, name)) : utimesSync(join(target, rel, name), now, now),
+    );
+  touch('');
   console.log(`copied ${fixDir} into ${target}`);
   await new Promise((resolve) => setTimeout(resolve, 2500));
   console.log('migrate:', await call<string[]>('db.migrate'));

@@ -54,10 +54,10 @@ reneplane-local pair <t>   pair another browser (the workspace shows the token)
 ```sh
 npm install
 npm test
-RENEPLANE_HOME=~/.reneplane-dev npm run dev -- --codebanks ..   # accepts http://localhost:5175 too
+RENEPLANE_HOME=~/.reneplane-dev npm run dev -- --codebanks ../codebanks   # accepts http://localhost:5175 too
 ```
 
-`--codebanks <dir>` clones `reneplane/codebank-x` from `<dir>/codebank-x` instead of GitHub.
+`--codebanks <dir>` clones `reneplane/codebank-x` from `<dir>/codebank-x` instead of GitHub (the codebanks live in `reneplane_project/codebanks/`).
 `npm run pin-runtimes` re-pins runtime downloads (URLs and SHA-256) after a version change.
 
 The wire protocol is in `src/protocol.ts`; the workspace mirrors it in `src/contracts/agent.ts`.

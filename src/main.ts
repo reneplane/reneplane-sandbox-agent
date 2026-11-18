@@ -10,6 +10,9 @@ import { addPendingPairing } from './pairing.js';
 import { STATUS_FILE, startServer } from './server.js';
 import { downloadUpdate, pruneOldVersions, RESTART_EXIT_CODE, switchTo } from './update.js';
 import { AGENT_VERSION } from './version.js';
+import { addPack, isPackId, listPacks, PACK_IDS, removePack, type PackId } from './packs/index.js';
+import { pruneRuntimes } from './runtimes/index.js';
+import { formatBytes } from './util/disk.js';
 
 /**
  * reneplane-local <command>
@@ -20,6 +23,9 @@ import { AGENT_VERSION } from './version.js';
  *   setup --token <t> --get <url>    what the install script runs after unpacking
  *   pair <token>       let the browser holding this install token pair
  *   doctor             check this computer
+ *   packs              the stack packs and what they use on disk
+ *   add <pack…>        install stack packs (e.g. add jdk21-maven mysql84)
+ *   remove <pack>      delete a stack pack
  *   config set <key> <value>
  *   uninstall [--all]  remove start-at-login and the agent (--all: also runtimes and missions)
  *
@@ -71,6 +77,8 @@ async function startInBackground(): Promise<void> {
 async function serve(): Promise<void> {
   logToConsole(process.stdout.isTTY ?? false);
   pruneOldVersions();
+  // Before any mission runs: what earlier versions downloaded and no longer need
+  pruneRuntimes();
   const running = await startServer({ dev: flag('dev'), codebankDir: option('codebanks'), onStopRequested: () => void shutdown(0) });
   let stopping = false;
   async function shutdown(code: number) {
@@ -218,13 +226,54 @@ async function main(): Promise<void> {
       return;
     }
 
+    case 'packs': {
+      for (const pack of listPacks()) {
+        const state = pack.state === 'installed' ? `installed, ${formatBytes(pack.sizeBytes)}` : pack.state === 'unavailable' ? 'not available on this computer' : 'not installed';
+        console.log(`${pack.id.padEnd(14)} ${pack.label.padEnd(15)} ${state}`);
+      }
+      return;
+    }
+
+    case 'add': {
+      const ids = rest.filter((arg) => !arg.startsWith('--'));
+      const unknown = ids.filter((id) => !isPackId(id));
+      if (!ids.length || unknown.length) {
+        console.error(`Usage: reneplane-local add <pack…>   packs: ${PACK_IDS.join(', ')}${unknown.length ? `\nUnknown: ${unknown.join(', ')}` : ''}`);
+        process.exitCode = 2;
+        return;
+      }
+      for (const id of ids as PackId[]) {
+        let last = '';
+        const info = await addPack(id, (detail) => {
+          if (detail !== last && process.stdout.isTTY) process.stdout.write(`\r${id}: ${detail}`.padEnd(70).slice(0, 70));
+          last = detail;
+        });
+        if (process.stdout.isTTY) process.stdout.write('\r'.padEnd(71) + '\r');
+        console.log(`${info.label} is ready (${formatBytes(info.sizeBytes)})`);
+      }
+      return;
+    }
+
+    case 'remove': {
+      const id = rest[0] ?? '';
+      if (!isPackId(id)) {
+        console.error(`Usage: reneplane-local remove <pack>   packs: ${PACK_IDS.join(', ')}`);
+        process.exitCode = 2;
+        return;
+      }
+      const status = (await control('status')) as { packsInUse?: PackId[] } | null;
+      removePack(id, status?.packsInUse ?? []);
+      console.log(`${id} removed.`);
+      return;
+    }
+
     case 'version':
     case '--version':
       console.log(AGENT_VERSION);
       return;
 
     default:
-      console.error(`Unknown command "${command}". Commands: start, serve, stop, status, setup, pair, doctor, config, uninstall, version`);
+      console.error(`Unknown command "${command}". Commands: start, serve, stop, status, setup, pair, doctor, packs, add, remove, config, uninstall, version`);
       process.exitCode = 2;
   }
 }
