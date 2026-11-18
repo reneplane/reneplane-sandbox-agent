@@ -1,6 +1,6 @@
 {
   "name": "reneplane-sandbox-agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "Reneplane Local: runs Reneplane Workspace missions on your own computer, for the IDE at workspace.reneplane.com",
