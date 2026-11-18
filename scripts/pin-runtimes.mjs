@@ -4,7 +4,7 @@
 // The agent refuses any download whose hash doesn't match this file.
 
 import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 const NODE = '22.23.5';
 const POSTGRES = '16.16.0';
@@ -155,14 +155,55 @@ async function dotnet() {
   return { version: sdk.version, platforms };
 }
 
-const manifest = {
-  node: await node(),
-  postgres: await postgres(),
-  git: await git(),
-  uv: await uv(),
-  java: await java(),
-  mysql: await mysql(),
-  dotnet: await dotnet(),
-};
-writeFileSync(new URL('../src/runtimes/manifest.json', import.meta.url), `${JSON.stringify(manifest, null, 2)}\n`);
-console.log('wrote src/runtimes/manifest.json');
+// ---- debug adapters (downloaded the first time a learner starts debugging) ----------------------
+
+const JS_DEBUG = 'v1.140.1';
+const DEBUGPY = '1.8.22';
+const NETCOREDBG = '3.2.0-1092';
+
+/** A GitHub release asset's URL and SHA-256 (GitHub publishes the digest; hash it ourselves if not) */
+async function releaseAsset(repo, tag, name) {
+  const response = await fetch(`https://api.github.com/repos/${repo}/releases/tags/${tag}`, {
+    headers: { accept: 'application/vnd.github+json', 'user-agent': 'reneplane-pin-runtimes' },
+  });
+  if (!response.ok) throw new Error(`${repo}@${tag}: ${response.status}`);
+  const asset = (await response.json()).assets.find((candidate) => candidate.name === name);
+  if (!asset) throw new Error(`${repo}@${tag} has no ${name}`);
+  const sha256 = asset.digest?.startsWith('sha256:') ? asset.digest.slice(7) : await hashOf(asset.browser_download_url);
+  return { url: asset.browser_download_url, sha256 };
+}
+
+/** vscode-js-debug's standalone DAP server (MIT): pure JavaScript, the same file everywhere */
+async function jsdebug() {
+  const file = await releaseAsset('microsoft/vscode-js-debug', JS_DEBUG, `js-debug-dap-${JS_DEBUG}.tar.gz`);
+  const platforms = Object.fromEntries(PLATFORMS.map((platform) => [platform, { ...file, format: 'tar', strip: 'js-debug' }]));
+  return { version: JS_DEBUG.replace(/^v/, ''), platforms };
+}
+
+/** debugpy (MIT): the pure-Python wheel, put on PYTHONPATH of the mission's own Python */
+async function debugpy() {
+  const release = JSON.parse(await text(`https://pypi.org/pypi/debugpy/${DEBUGPY}/json`));
+  const wheel = release.urls.find((file) => file.filename.endsWith('-py2.py3-none-any.whl'));
+  const platforms = Object.fromEntries(PLATFORMS.map((platform) => [platform, { url: wheel.url, sha256: wheel.digests.sha256, format: 'zip' }]));
+  return { version: DEBUGPY, platforms };
+}
+
+/** Samsung's netcoredbg (MIT), a DAP debugger for .NET. There is no build for Intel Macs. */
+async function netcoredbg() {
+  const name = { 'win32-x64': 'netcoredbg-win64.zip', 'linux-x64': 'netcoredbg-linux-amd64.tar.gz', 'darwin-arm64': 'netcoredbg-osx-arm64.zip' };
+  const platforms = {};
+  for (const [platform, file] of Object.entries(name)) {
+    platforms[platform] = { ...(await releaseAsset('Samsung/netcoredbg', NETCOREDBG, file)), format: file.endsWith('.zip') ? 'zip' : 'tar', strip: 'netcoredbg' };
+  }
+  return { version: NETCOREDBG, platforms };
+}
+
+// --only=a,b updates just those entries and keeps the rest of the manifest as it is
+const BUILDERS = { node, postgres, git, uv, java, mysql, dotnet, jsdebug, debugpy, netcoredbg };
+const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length).split(',');
+const manifestUrl = new URL('../src/runtimes/manifest.json', import.meta.url);
+const previous = only ? JSON.parse(readFileSync(manifestUrl, 'utf8')) : {};
+const manifest = {};
+for (const [name, build] of Object.entries(BUILDERS)) manifest[name] = !only || only.includes(name) ? await build() : previous[name];
+writeFileSync(manifestUrl, `${JSON.stringify(manifest, null, 2)}\n`);
+console.log(`wrote src/runtimes/manifest.json${only ? ` (${only.join(', ')})` : ''}`);

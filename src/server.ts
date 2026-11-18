@@ -1,3 +1,4 @@
+import type { DebugCommand } from './debug/session.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -256,6 +257,20 @@ class Session implements MissionClient {
         return mission.gitStatus();
       case 'git.diff':
         return mission.gitDiff();
+      case 'debug.start':
+        return mission.debugStart((params as { breakpoints: { path: string; lines: number[] }[] }).breakpoints);
+      case 'debug.stop':
+        return mission.debugStop();
+      case 'debug.restart':
+        return mission.debugRestart();
+      case 'debug.setBreakpoints': {
+        const { path, lines } = params as { path: string; lines: number[] };
+        return mission.debugSetBreakpoints(path, lines);
+      }
+      case 'debug.request': {
+        const { command, arguments: args } = params as { command: DebugCommand; arguments: Record<string, unknown> };
+        return mission.debugRequest(command, args);
+      }
     }
     throw new AgentError('unknown_method', `Unknown method ${method}`);
   }

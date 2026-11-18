@@ -35,6 +35,33 @@ const Service = z.object({
 });
 
 /**
+ * Debugging the backend. While a debug session runs, the backend is started this way instead of
+ * services.backend.run, with its debugger port at {{ports.debug}}:
+ *   node    `run` opens the inspector (node --inspect=127.0.0.1:{{ports.debug}} …); js-debug attaches
+ *   python  `run` starts debugpy (python -m debugpy --listen 127.0.0.1:{{ports.debug}} …); we attach
+ *   java    `run` starts the JVM with -agentlib:jdwp=…address=127.0.0.1:{{ports.debug}}; `sourceRoots`
+ *           map classes to .java files
+ *   dotnet  `build` builds, then netcoredbg launches `program` (the built .dll) in `cwd`
+ * Debug runs have no file watcher: a change under `restartOn` restarts the session.
+ */
+const Debug = z
+  .object({
+    adapter: z.enum(['node', 'python', 'java', 'dotnet']),
+    run: z.string().optional(),
+    build: z.string().optional(),
+    program: z.string().optional(),
+    /** Defaults to the backend service's folder */
+    cwd: z.string().optional(),
+    env: z.record(z.string(), z.string()).default({}),
+    sourceRoots: z.array(z.string()).default([]),
+    restartOn: z.array(z.string()).default([]),
+  })
+  .refine((debug) => (debug.adapter === 'dotnet' ? Boolean(debug.build && debug.program) : Boolean(debug.run)), {
+    message: 'debug needs `run` (node, python, java) or `build` and `program` (dotnet)',
+  })
+  .refine((debug) => debug.adapter !== 'java' || debug.sourceRoots.length > 0, { message: 'java debugging needs sourceRoots' });
+
+/**
  * A test step is either a command that writes a JUnit/TRX report, or a SQL check: the agent runs the
  * learner's query against the mission's database and compares the result with the expected rows.
  */
@@ -81,6 +108,8 @@ export const WorkspaceFile = z.object({
     })
     .optional(),
   services: z.object({ backend: Service.optional(), frontend: Service.optional() }).default({}),
+  /** How the IDE's debugger runs the backend (absent: the mission can't be debugged) */
+  debug: Debug.optional(),
   test: z.array(TestStep).min(1),
   preview: z.object({ service: z.enum(['frontend', 'backend']), path: z.string().startsWith('/') }).nullable().default(null),
   env: z.record(z.string(), z.string()).default({}),

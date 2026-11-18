@@ -18,8 +18,10 @@ import {
 } from '../protocol.js';
 import { ensureRuntime, isInstalled, LABELS, type Runtime, type RuntimeName } from '../runtimes/index.js';
 import { randomToken } from '../security.js';
+import { resolveInside } from '../util/paths.js';
 import { pickPort } from '../util/ports.js';
 import { buildEnv, runCommand, type Env } from '../util/process.js';
+import { Debugger, type DebugCommand } from '../debug/session.js';
 import { MissionFiles } from './files.js';
 import { Git } from './git.js';
 import { Services } from './services.js';
@@ -70,6 +72,7 @@ export class Mission {
   private booted = false;
   private booting: Promise<void> | null = null;
   private runQueue: Promise<unknown> = Promise.resolve();
+  private debuggerInstance: Debugger | null = null;
   /** An IDE tab is connected to this mission (kept up to date by the manager; sent with lease heartbeats) */
   watched = true;
 
@@ -408,7 +411,11 @@ export class Mission {
   /** Restart a service whose sources changed, if it can't reload by itself (restartOn in workspace.yaml) */
   private onFileChanged(path: string): void {
     if (!this.booted || !this.workspace) return;
+    // While debugging, the debugger owns the backend (and restarts its debug run itself)
+    const debugging = this.debuggerInstance?.active ?? false;
+    if (debugging) this.debuggerInstance!.onFileChanged(path);
     for (const name of ['backend', 'frontend'] as const) {
+      if (name === 'backend' && debugging) continue;
       const service = this.workspace.services[name];
       if (!service?.restartOn.some((prefix) => path.startsWith(prefix))) continue;
       clearTimeout(this.restartTimers.get(name));
@@ -548,8 +555,52 @@ export class Mission {
     return this.git;
   }
 
+  // ---- debugging ----------------------------------------------------------------------------------
+
+  private debug(): Debugger {
+    this.requireBooted();
+    if (!this.workspace?.debug || !this.ports.backend) throw new AgentError('failed', "This mission's backend can't be debugged yet");
+    this.debuggerInstance ??= new Debugger({
+      repoDir: this.repoDir,
+      workspace: this.workspace,
+      services: this.services,
+      backendPort: this.ports.backend,
+      runtimes: this.runtimes as Map<string, Runtime>,
+      env: () => this.env(),
+      vars: () => this.vars(),
+      startBackend: () => this.startService('backend'),
+      log: (entry) => this.log(entry),
+      emit: (event, data) => this.emit(event, data),
+    });
+    return this.debuggerInstance;
+  }
+
+  debugStart(breakpoints: { path: string; lines: number[] }[]) {
+    for (const file of breakpoints) resolveInside(this.repoDir, file.path);
+    return this.debug().start(breakpoints);
+  }
+
+  debugStop() {
+    return this.debuggerInstance?.stop() ?? Promise.resolve();
+  }
+
+  debugRestart() {
+    return this.debug().restart();
+  }
+
+  debugSetBreakpoints(path: string, lines: number[]) {
+    resolveInside(this.repoDir, path);
+    return this.debug().setBreakpoints(path, lines);
+  }
+
+  debugRequest(command: DebugCommand, args: Record<string, unknown>) {
+    return this.debug().request(command, args);
+  }
+
   /** Stop everything this mission runs; files and the database stay on disk */
   async suspend(): Promise<void> {
+    await this.debuggerInstance?.dispose();
+    this.debuggerInstance = null;
     this.booted = false;
     this.terminals.closeAll();
     this.files?.unwatch();

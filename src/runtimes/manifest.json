@@ -186,5 +186,82 @@
         "format": "tar"
       }
     }
+  },
+  "jsdebug": {
+    "version": "1.140.1",
+    "platforms": {
+      "win32-x64": {
+        "url": "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.1/js-debug-dap-v1.140.1.tar.gz",
+        "sha256": "c72fab31bcbfdce6ad1f42adfd28eff8d4681dd3b03b5e2e6f9e72e6f9927faf",
+        "format": "tar",
+        "strip": "js-debug"
+      },
+      "linux-x64": {
+        "url": "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.1/js-debug-dap-v1.140.1.tar.gz",
+        "sha256": "c72fab31bcbfdce6ad1f42adfd28eff8d4681dd3b03b5e2e6f9e72e6f9927faf",
+        "format": "tar",
+        "strip": "js-debug"
+      },
+      "darwin-arm64": {
+        "url": "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.1/js-debug-dap-v1.140.1.tar.gz",
+        "sha256": "c72fab31bcbfdce6ad1f42adfd28eff8d4681dd3b03b5e2e6f9e72e6f9927faf",
+        "format": "tar",
+        "strip": "js-debug"
+      },
+      "darwin-x64": {
+        "url": "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.1/js-debug-dap-v1.140.1.tar.gz",
+        "sha256": "c72fab31bcbfdce6ad1f42adfd28eff8d4681dd3b03b5e2e6f9e72e6f9927faf",
+        "format": "tar",
+        "strip": "js-debug"
+      }
+    }
+  },
+  "debugpy": {
+    "version": "1.8.22",
+    "platforms": {
+      "win32-x64": {
+        "url": "https://files.pythonhosted.org/packages/56/3d/c7dc9f35bc9e22cdb53679f844bee40fd5cff871862f60595869a433400d/debugpy-1.8.22-py2.py3-none-any.whl",
+        "sha256": "a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947",
+        "format": "zip"
+      },
+      "linux-x64": {
+        "url": "https://files.pythonhosted.org/packages/56/3d/c7dc9f35bc9e22cdb53679f844bee40fd5cff871862f60595869a433400d/debugpy-1.8.22-py2.py3-none-any.whl",
+        "sha256": "a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947",
+        "format": "zip"
+      },
+      "darwin-arm64": {
+        "url": "https://files.pythonhosted.org/packages/56/3d/c7dc9f35bc9e22cdb53679f844bee40fd5cff871862f60595869a433400d/debugpy-1.8.22-py2.py3-none-any.whl",
+        "sha256": "a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947",
+        "format": "zip"
+      },
+      "darwin-x64": {
+        "url": "https://files.pythonhosted.org/packages/56/3d/c7dc9f35bc9e22cdb53679f844bee40fd5cff871862f60595869a433400d/debugpy-1.8.22-py2.py3-none-any.whl",
+        "sha256": "a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947",
+        "format": "zip"
+      }
+    }
+  },
+  "netcoredbg": {
+    "version": "3.2.0-1092",
+    "platforms": {
+      "win32-x64": {
+        "url": "https://github.com/Samsung/netcoredbg/releases/download/3.2.0-1092/netcoredbg-win64.zip",
+        "sha256": "3c410a45fa502415203a94fcb88654af65bf8e3dac158a5527a722e7a6b9274a",
+        "format": "zip",
+        "strip": "netcoredbg"
+      },
+      "linux-x64": {
+        "url": "https://github.com/Samsung/netcoredbg/releases/download/3.2.0-1092/netcoredbg-linux-amd64.tar.gz",
+        "sha256": "080eb3b2d2152465f599d3b33d1ee6e747794e11cc0a3773ec689f5e5f2c5afa",
+        "format": "tar",
+        "strip": "netcoredbg"
+      },
+      "darwin-arm64": {
+        "url": "https://github.com/Samsung/netcoredbg/releases/download/3.2.0-1092/netcoredbg-osx-arm64.zip",
+        "sha256": "f4fa33b3ff874910cc184b4bb3b9c56d0abdf5c6521cee0b144d7c6e4a6e59ea",
+        "format": "zip",
+        "strip": "netcoredbg"
+      }
+    }
   }
 }

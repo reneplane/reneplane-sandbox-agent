@@ -11,8 +11,23 @@ export interface Checksum {
   value: string;
 }
 
-/** Download a file, checking its hash as it streams. Reports "12 of 48 MB". */
+/**
+ * Download a file, checking its hash as it streams. Reports "12 of 48 MB". A dropped connection is
+ * retried (three more tries, with a pause); a checksum mismatch never is.
+ */
 export async function downloadVerified(url: string, checksum: Checksum, destination: string, onProgress?: (detail: string) => void): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await downloadOnce(url, checksum, destination, onProgress);
+    } catch (error) {
+      if (attempt >= 4 || /Checksum mismatch|Download failed \(4\d\d\)/.test((error as Error).message)) throw error;
+      onProgress?.(`Connection problem, retrying (${attempt} of 3)`);
+      await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
+    }
+  }
+}
+
+async function downloadOnce(url: string, checksum: Checksum, destination: string, onProgress?: (detail: string) => void): Promise<void> {
   if (existsSync(destination) && hashFile(destination, checksum.algorithm) === checksum.value) return;
   mkdirSync(dirname(destination), { recursive: true });
   const response = await fetch(url, { redirect: 'follow' });

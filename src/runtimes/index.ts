@@ -41,6 +41,9 @@ export const LABELS: Record<RuntimeName, string> = {
   java: 'Java (Temurin JDK)',
   mysql: 'MySQL',
   dotnet: '.NET SDK',
+  jsdebug: 'JavaScript debugger',
+  debugpy: 'Python debugger (debugpy)',
+  netcoredbg: '.NET debugger (netcoredbg)',
 };
 
 export function platformKey(): string {
@@ -151,6 +154,11 @@ function describe(name: RuntimeName): Runtime {
           DOTNET_MULTILEVEL_LOOKUP: '0',
         },
       };
+    // Debug adapters: started by the agent itself, nothing goes on the mission's PATH
+    case 'jsdebug':
+    case 'debugpy':
+    case 'netcoredbg':
+      return { name, version, dir, path: [], env: {} };
   }
 }
 

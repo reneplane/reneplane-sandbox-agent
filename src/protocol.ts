@@ -126,6 +126,7 @@ export interface RunResult {
 
 const RepoPath = z.string().min(1).max(400);
 const Empty = z.object({}).optional();
+const FileBreakpoints = z.object({ path: RepoPath, lines: z.array(z.number().int().min(1).max(1_000_000)).max(200) });
 
 export const Methods = {
   hello: z.object({
@@ -163,6 +164,15 @@ export const Methods = {
   'git.commit': z.object({ message: z.string().min(1).max(2000) }),
   'git.status': Empty,
   'git.diff': Empty,
+  // Backend debugging: the agent runs the stack's debug adapter; the IDE speaks a subset of DAP to it
+  'debug.start': z.object({ breakpoints: z.array(FileBreakpoints).max(200).default([]) }),
+  'debug.stop': Empty,
+  'debug.restart': Empty,
+  'debug.setBreakpoints': FileBreakpoints,
+  'debug.request': z.object({
+    command: z.enum(['threads', 'stackTrace', 'scopes', 'variables', 'continue', 'next', 'stepIn', 'stepOut', 'pause', 'evaluate']),
+    arguments: z.record(z.string(), z.unknown()).default({}),
+  }),
 } as const;
 
 export type MethodName = keyof typeof Methods;
@@ -176,7 +186,11 @@ export type AgentEvent =
   | 'services.change'
   | 'run.line'
   | 'git.change'
-  | 'mission.stopped';
+  | 'mission.stopped'
+  /** { state: starting | running | paused | restarting | stopped | error, adapter, message } */
+  | 'debug.state'
+  /** { event, body }: a DAP event (stopped, continued, breakpoint, thread, terminated, exited), repo paths */
+  | 'debug.event';
 
 /** Error codes the IDE reacts to; anything else is shown as its message */
 export type ErrorCode =
