@@ -40,6 +40,9 @@ for (const name of ['node-pty', platformPackage]) {
   cpSync(source, join(out, 'app', 'node_modules', '@lydell', name), { recursive: true });
 }
 
+// Codebank templates for `reneplane-local codebank init`
+if (existsSync('templates')) cpSync('templates', join(out, 'app', 'templates'), { recursive: true });
+
 cpSync('src/launch.mjs', join(out, 'launch.mjs'));
 writeFileSync(join(out, 'app', 'VERSION'), version);
 console.log(`Built Reneplane Local ${version} for ${process.platform}-${process.arch} into ${out}/`);

@@ -5,14 +5,16 @@ import { compileRelease, scratch } from './compile.js';
 import { gitFor } from './repo.js';
 import { loadCodebank } from './spec.js';
 import { initCodebank, newProblem } from './init.js';
+import { sendReport, uploadRelease, type EngineTarget } from './upload.js';
 
 /**
  * reneplane-local codebank <command>     (run inside a codebank checkout, or pass --dir)
  *
- *   check [--quick] [--stack s,…] [--problem ID,…] [--json report.json] [--keep]
+ *   check [--quick] [--stack s,…] [--problem ID,…] [--json report.json] [--keep] [--report <engine>]
  *                       is this repository fit to connect to the workspace?
- *   compile --out <dir> [--release v2026.11.1] [--stack s,…] [--problem ID,…] [--keep]
- *                       build the starter and grader bundles and release.json
+ *   compile --out <dir> [--release v2026.11.1] [--stack s,…] [--problem ID,…] [--keep] [--upload <engine>]
+ *                       build the starter and grader bundles and release.json (and send them to the engine)
+ *   upload --out <dir> --engine <url>     send a compiled release (CI: GitHub OIDC; locally: --dev-token)
  *   init <dir> --name <Name> --stack <id> [--stack <id>…]
  *                       start a new codebank from the templates
  *
@@ -28,6 +30,14 @@ function option(args: string[], name: string): string | undefined {
 function list(args: string[], name: string): string[] | undefined {
   const values = args.flatMap((arg, index) => (arg === `--${name}` && args[index + 1] ? args[index + 1]!.split(',') : []));
   return values.length ? values : undefined;
+}
+
+/** --report/--upload/--engine <url>, with --audience (default from the host) and --dev-token for a local engine */
+function engineTarget(args: string[], name: string): EngineTarget | null {
+  const url = option(args, name);
+  if (!url) return null;
+  const audience = option(args, 'audience') ?? (new URL(url).hostname.includes('staging') ? 'reneplane-engine-staging' : 'reneplane-engine');
+  return { url, audience, devToken: option(args, 'dev-token') ?? process.env.RENEPLANE_ENGINE_DEV_TOKEN };
 }
 
 const MARK: Record<CheckResult['status'], string> = { pass: '✓', fail: '✗', warn: '!', skip: '-' };
@@ -58,6 +68,11 @@ export async function codebankCommand(args: string[]): Promise<number> {
       const json = option(rest, 'json');
       if (json) writeFileSync(json, `${JSON.stringify(report, null, 2)}\n`);
       console.log(`\n${report.summary} (${Math.round(report.durationMs / 1000)} s)`);
+      const engine = engineTarget(rest, 'report');
+      if (engine && report.codebank !== 'unknown') {
+        const sent = await sendReport(engine, report, loadCodebank(dir).spec.name);
+        console.log(`Reported to ${engine.url}: codebank ${sent.codebank} is ${sent.status}${sent.status === 'detected' ? ' (an admin connects it in the admin portal)' : ''}`);
+      }
       return report.ok ? 0 : 1;
     }
     case 'compile': {
@@ -81,6 +96,15 @@ export async function codebankCommand(args: string[]): Promise<number> {
         rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
       } else console.log(`work folder kept: ${work}`);
       console.log(`\nwrote ${resolve(out)}/release.json`);
+      const engine = engineTarget(rest, 'upload');
+      if (engine) await uploadRelease(engine, resolve(out), (line) => console.log(line));
+      return 0;
+    }
+    case 'upload': {
+      const out = option(rest, 'out');
+      const engine = engineTarget(rest, 'engine');
+      if (!out || !engine) throw new Error('Usage: reneplane-local codebank upload --out <compiled dir> --engine <url> [--audience a] [--dev-token t]');
+      await uploadRelease(engine, resolve(out), (line) => console.log(line));
       return 0;
     }
     case 'init': {

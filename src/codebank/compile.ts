@@ -45,6 +45,8 @@ export interface CompiledVariant {
   starter: FileRef;
   grader: FileRef;
   template: FileRef | null;
+  /** The reference as a learner-shaped patch: shown to a learner after they submit */
+  reference: FileRef;
   /** Paths the reference changes, for the report */
   referenceChanges: string[];
 }
@@ -245,7 +247,7 @@ export async function compileVariant(context: CompileContext, problem: LoadedPro
   if (problem.spec.kind === 'app') {
     const stackGrade = loadStackGrade(codebank.root, stack);
     if (!stackGrade) throw new Error(`stacks/${stack}/.reneplane/grade.yaml is missing (the grader needs it to build ${stack})`);
-    grade = { kind: 'app', engine: stackSpec.engine, ...stackGrade, allow, seed: stackSpec.seed ?? workspace.database.seed ?? null, template: template ? 'template.sql' : null, hidden: `hidden/${suiteName}` };
+    grade = { kind: 'app', engine: stackSpec.engine, ...stackGrade, allow, seed: template ? null : (stackSpec.seed ?? workspace.database.seed ?? null), template: template ? 'template.sql' : null, hidden: `hidden/${suiteName}` };
   } else {
     const step = workspace.test.find((candidate) => candidate.sql);
     if (!step?.sql) throw new Error(`${problem.spec.id} on ${stack}: the workspace has no SQL test step`);
@@ -285,6 +287,8 @@ export async function compileVariant(context: CompileContext, problem: LoadedPro
       ...extra,
     ]),
   );
+  const referenceFile = join(variantOut, 'reference.patch');
+  writeFileSync(referenceFile, referencePatch);
   let templateRef: FileRef | null = null;
   if (template) {
     const templateFile = join(variantOut, 'template.sql');
@@ -304,6 +308,7 @@ export async function compileVariant(context: CompileContext, problem: LoadedPro
       starter: fileRef(out, starterFile),
       grader: fileRef(out, graderFile),
       template: templateRef,
+      reference: fileRef(out, referenceFile),
       referenceChanges: changes,
     },
     work: { starter, reference, repoDir: repo.dir, bundle, referencePatch, workspace, template },
