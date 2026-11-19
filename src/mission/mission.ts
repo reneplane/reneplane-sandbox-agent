@@ -549,6 +549,16 @@ export class Mission {
     return applied;
   }
 
+  /**
+   * Put a diff on the running mission's tree and apply its migrations: how the codebank checker tries
+   * the reference on a starter, the way a learner's finished work would land.
+   */
+  async applyWork(patch: string): Promise<string[]> {
+    this.requireBooted();
+    await this.requireGit().restore(this.source.baseRef, patch);
+    return this.migrate();
+  }
+
   private requireDb(): DatabaseProvider {
     if (!this.db) throw new AgentError('database_unavailable', 'The database is still starting');
     return this.db;

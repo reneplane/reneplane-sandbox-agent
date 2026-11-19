@@ -1,0 +1,88 @@
+name: Reneplane codebank
+description: Check a Reneplane codebank, report to the engine, and on release tags compile and upload it
+inputs:
+  mode:
+    description: "check (report the result) or release (check, compile, upload)"
+    required: false
+    default: check
+  level:
+    description: "quick (structure only) or full (boot every stack and problem)"
+    required: false
+    default: full
+  stacks:
+    description: "Comma-separated stack ids to boot (empty: all)"
+    required: false
+    default: ""
+  engine:
+    description: "The engine's URL"
+    required: false
+    default: https://reneplane-engine.reneplane.workers.dev
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    # The tooling is this repository at the action's ref, built here (no release needed)
+    - name: Build the Reneplane tooling
+      shell: bash
+      run: |
+        cd "$GITHUB_ACTION_PATH/.."
+        npm ci --no-audit --no-fund --loglevel=error
+        npm run build --silent
+        echo "RENEPLANE_CLI=$GITHUB_ACTION_PATH/../dist/app/agent.mjs" >> "$GITHUB_ENV"
+        echo "RENEPLANE_HOME=$HOME/.reneplane-ci" >> "$GITHUB_ENV"
+
+    # Ubuntu 24.04 renamed libaio; the portable MySQL still looks for libaio.so.1
+    - name: MySQL's libaio
+      if: runner.os == 'Linux' && inputs.level == 'full'
+      shell: bash
+      run: |
+        if ! ldconfig -p | grep -q 'libaio.so.1 '; then
+          sudo apt-get install -y -qq libaio1t64 >/dev/null
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libaio.so.1t64 /usr/lib/x86_64-linux-gnu/libaio.so.1
+        fi
+
+    - name: Cache stack packs
+      if: inputs.level == 'full'
+      uses: actions/cache@v4
+      with:
+        path: ~/.reneplane-ci/runtimes
+        key: reneplane-packs-${{ runner.os }}-${{ hashFiles(format('{0}/../src/runtimes/manifest.json', github.action_path)) }}
+
+    - name: Cache public packages
+      if: inputs.level == 'full'
+      uses: actions/cache@v4
+      with:
+        path: ~/.reneplane-ci/cache
+        key: reneplane-cache-${{ runner.os }}-${{ github.run_id }}
+        restore-keys: reneplane-cache-${{ runner.os }}-
+
+    - name: Check
+      shell: bash
+      env:
+        LEVEL: ${{ inputs.level }}
+        STACKS: ${{ inputs.stacks }}
+        ENGINE: ${{ inputs.engine }}
+      run: |
+        args=(codebank check --json reneplane-report.json --report "$ENGINE")
+        [ "$LEVEL" = quick ] && args+=(--quick)
+        [ -n "$STACKS" ] && args+=(--stack "$STACKS")
+        node "$RENEPLANE_CLI" "${args[@]}"
+
+    - name: Compile and upload the release
+      if: inputs.mode == 'release'
+      shell: bash
+      env:
+        ENGINE: ${{ inputs.engine }}
+        TAG: ${{ github.ref_name }}
+      run: node "$RENEPLANE_CLI" codebank compile --out "$RUNNER_TEMP/release" --release "$TAG" --upload "$ENGINE"
+
+    - name: Keep the report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: reneplane-report
+        path: reneplane-report.json
+        if-no-files-found: ignore
