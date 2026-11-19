@@ -9,6 +9,8 @@ $ProgressPreference = 'SilentlyContinue'
 $Token = '__RENEPLANE_TOKEN__'
 $GetUrl = '__RENEPLANE_GET_URL__'
 $Release = '__RENEPLANE_RELEASE_URL__'
+# Stack packs to add after installing (checked by get.reneplane.com: pack ids only)
+$Packs = '__RENEPLANE_PACKS__'
 
 function Fail($message) {
   Write-Host ''
@@ -54,7 +56,7 @@ try {
   Set-Content -Encoding ascii -Path (Join-Path $Bin 'current.json') -Value ('{"version":"' + $Version + '"}')
 
   Write-Host "  Pairing with your browser and starting Reneplane Local $Version..."
-  & $Node $Launch setup --token $Token --get $GetUrl
+  if ($Packs) { & $Node $Launch setup --token $Token --get $GetUrl --packs $Packs } else { & $Node $Launch setup --token $Token --get $GetUrl }
   if ($LASTEXITCODE -ne 0) { Fail 'setup did not finish.' }
   Write-Host ''
   Write-Host 'Go back to the workspace tab and click Allow if your browser asks.' -ForegroundColor Green

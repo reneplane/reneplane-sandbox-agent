@@ -7,6 +7,8 @@ set -eu
 TOKEN='__RENEPLANE_TOKEN__'
 GET_URL='__RENEPLANE_GET_URL__'
 RELEASE='__RENEPLANE_RELEASE_URL__'
+# Stack packs to add after installing (checked by get.reneplane.com: pack ids only)
+PACKS='__RENEPLANE_PACKS__'
 
 fail() {
   printf '\nReneplane Local could not be installed: %s\n' "$1" >&2
@@ -58,5 +60,9 @@ cp -R "$temp/release/app" "$bin/app-$version"
 printf '{"version":"%s"}' "$version" > "$bin/current.json"
 
 echo "  Pairing with your browser and starting Reneplane Local $version..."
-"$bin/node" "$bin/launch.mjs" setup --token "$TOKEN" --get "$GET_URL" || fail 'setup did not finish.'
+if [ -n "$PACKS" ]; then
+  "$bin/node" "$bin/launch.mjs" setup --token "$TOKEN" --get "$GET_URL" --packs "$PACKS" || fail 'setup did not finish.'
+else
+  "$bin/node" "$bin/launch.mjs" setup --token "$TOKEN" --get "$GET_URL" || fail 'setup did not finish.'
+fi
 printf '\nGo back to the workspace tab and click Allow if your browser asks.\n'

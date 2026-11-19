@@ -1,3 +1,4 @@
+import { WorkerEntrypoint } from 'cloudflare:workers';
 // get.reneplane.com: the Reneplane Local installer service (Cloudflare Worker)
 //
 //   POST /install-tokens           from the workspace (CORS): a one-time install token, valid 30 minutes
@@ -14,6 +15,9 @@ import unixScript from '../../install/local.sh';
 
 const TOKEN_TTL_SECONDS = 30 * 60;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+/** Stack packs the install command may ask for (src/packs/index.ts in the agent) */
+const KNOWN_PACKS = new Set(['node22', 'python312-uv', 'jdk21-maven', 'dotnet10', 'postgres16', 'mysql84']);
 
 export default {
   async fetch(request, env) {
@@ -37,7 +41,10 @@ export default {
       const token = url.searchParams.get('t') ?? '';
       const known = TOKEN_PATTERN.test(token) && (await env.TOKENS.get(`tok:${await sha256(token)}`)) !== null;
       if (!known) return text(windows ? EXPIRED_PS1 : EXPIRED_SH);
+      // &packs=jdk21-maven,mysql84 goes into a script that runs under iex or sh: known pack ids only
+      const packs = (url.searchParams.get('packs') ?? '').split(',').filter((id) => KNOWN_PACKS.has(id)).slice(0, 10).join(',');
       const script = (windows ? windowsScript : unixScript)
+        .replaceAll('__RENEPLANE_PACKS__', packs)
         .replaceAll('__RENEPLANE_TOKEN__', token)
         .replaceAll('__RENEPLANE_GET_URL__', url.origin)
         .replaceAll('__RENEPLANE_RELEASE_URL__', env.RELEASE_URL);
@@ -57,6 +64,12 @@ export default {
       const payload = `v1.${deviceId}.${issuedAt}`;
       const deviceToken = `${payload}.${await hmac(env.DEVICE_TOKEN_SECRET, payload)}`;
       console.log(JSON.stringify({ event: 'device_registered', deviceId, platform: body.platform, arch: body.arch, version: body.version }));
+      // The registry the admin portal lists (and revokes from); counters per day for the overview
+      const day = new Date().toISOString().slice(0, 10);
+      const device = { deviceId, platform: String(body.platform ?? '').slice(0, 20), arch: String(body.arch ?? '').slice(0, 20), version: String(body.version ?? '').slice(0, 30), registeredAt: new Date().toISOString() };
+      await env.DEVICES.put(`device:${deviceId}`, JSON.stringify(device), { metadata: device });
+      const count = Number((await env.DEVICES.get(`count:registered:${day}`)) ?? 0);
+      await env.DEVICES.put(`count:registered:${day}`, String(count + 1), { expirationTtl: 120 * 86_400 });
       return json({ deviceId, deviceToken });
     }
 
@@ -123,4 +136,35 @@ function json(body, status = 200, headers = {}) {
 
 function text(body, status = 200) {
   return new Response(body, { status, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
+}
+
+/**
+ * For the admin portal (a service binding to this entrypoint; no URL reaches it): registered computers,
+ * revoking one (the engine, the SQL Server pool and the grader refuse its device token from then on),
+ * and installs per day.
+ */
+export class Internal extends WorkerEntrypoint {
+  async devices(cursor) {
+    const page = await this.env.DEVICES.list({ prefix: 'device:', cursor: cursor || undefined, limit: 200 });
+    const revoked = new Set((await this.env.DEVICES.list({ prefix: 'revoked:', limit: 1000 })).keys.map((key) => key.name.slice('revoked:'.length)));
+    return {
+      devices: page.keys.map((key) => ({ ...(key.metadata ?? { deviceId: key.name.slice('device:'.length) }), revoked: revoked.has(key.name.slice('device:'.length)) })),
+      cursor: page.list_complete ? null : page.cursor,
+    };
+  }
+
+  async revoke(deviceId, actor) {
+    if (!/^[0-9a-f-]{36}$/.test(deviceId)) throw new Error('Not a device id');
+    await this.env.DEVICES.put(`revoked:${deviceId}`, JSON.stringify({ at: new Date().toISOString(), actor }));
+    return { revoked: deviceId };
+  }
+
+  async stats() {
+    const days = [];
+    for (let offset = 0; offset < 14; offset += 1) {
+      const day = new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
+      days.push({ day, registered: Number((await this.env.DEVICES.get(`count:registered:${day}`)) ?? 0) });
+    }
+    return { days };
+  }
 }
