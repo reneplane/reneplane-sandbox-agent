@@ -44,12 +44,18 @@ runs:
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libaio.so.1t64 /usr/lib/x86_64-linux-gnu/libaio.so.1
         fi
 
+    # hashFiles() only reads the workspace, and this action's files are outside it
+    - name: Which runtimes are pinned
+      id: pinned
+      shell: bash
+      run: echo "key=$(sha256sum "$GITHUB_ACTION_PATH/../src/runtimes/manifest.json" | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
     - name: Cache stack packs
       if: inputs.level == 'full'
       uses: actions/cache@v4
       with:
         path: ~/.reneplane-ci/runtimes
-        key: reneplane-packs-${{ runner.os }}-${{ hashFiles(format('{0}/../src/runtimes/manifest.json', github.action_path)) }}
+        key: reneplane-packs-${{ runner.os }}-${{ steps.pinned.outputs.key }}
 
     - name: Cache public packages
       if: inputs.level == 'full'
