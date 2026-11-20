@@ -71,10 +71,20 @@ export async function runCommand(
   if (options.timeoutMs) timer = setTimeout(() => void spawned.kill(), options.timeoutMs);
   const code = await spawned.exited;
   if (timer) clearTimeout(timer);
-  // Anything the command left running in the background (a build server, a dev server it forked)
-  // goes too: it would hold our output pipes open, and with them this process
+  // 'exit' can come before the last output is read: wait for the pipes to close, but not for ever,
+  // since something the command left in the background may hold them
+  await Promise.race([Promise.all([closed(spawned.child.stdout), closed(spawned.child.stderr)]), delay(500)]);
+  // That background process goes too (a build server, a dev server it forked): it would hold our
+  // output pipes open, and with them this process
   await spawned.kill();
   return { code, output };
+}
+
+function closed(stream: NodeJS.ReadableStream | null): Promise<void> {
+  return new Promise((resolve) => {
+    if (!stream || (stream as { closed?: boolean }).closed) resolve();
+    else stream.once('close', () => resolve());
+  });
 }
 
 /** Run a program directly (no shell), for tools the agent controls, e.g. git or pg_ctl */
