@@ -71,7 +71,20 @@ export async function runCommand(
   if (options.timeoutMs) timer = setTimeout(() => void spawned.kill(), options.timeoutMs);
   const code = await spawned.exited;
   if (timer) clearTimeout(timer);
+  // 'exit' can come before the last output is read: wait for the pipes to close, but not for ever,
+  // since something the command left in the background may hold them
+  await Promise.race([Promise.all([closed(spawned.child.stdout), closed(spawned.child.stderr)]), delay(500)]);
+  // That background process goes too (a build server, a dev server it forked): it would hold our
+  // output pipes open, and with them this process
+  await spawned.kill();
   return { code, output };
+}
+
+function closed(stream: NodeJS.ReadableStream | null): Promise<void> {
+  return new Promise((resolve) => {
+    if (!stream || (stream as { closed?: boolean }).closed) resolve();
+    else stream.once('close', () => resolve());
+  });
 }
 
 /** Run a program directly (no shell), for tools the agent controls, e.g. git or pg_ctl */
@@ -119,29 +132,43 @@ export function runFile(
   });
 }
 
+/**
+ * Stop a process and everything it started. On POSIX, commands from startCommand run in their own
+ * process group, and the whole group is signalled even when the shell itself has already exited:
+ * `dotnet run`'s app or a forked build server outlives it otherwise, keeping ports, files and our
+ * output pipes busy (a CI job once hung for an hour on four of them).
+ */
 export async function killTree(child: ChildProcess, exited?: Promise<unknown>): Promise<void> {
-  if (child.exitCode !== null || child.pid === undefined) return;
+  const pid = child.pid;
+  if (pid === undefined) return;
   if (isWindows) {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-  } else {
-    try {
-      process.kill(-child.pid, 'SIGTERM');
-    } catch {
-      child.kill('SIGTERM');
-    }
-    const forced = setTimeout(() => {
-      try {
-        process.kill(-child.pid!, 'SIGKILL');
-      } catch {
-        // already gone
-      }
-    }, 5000);
-    await exited;
-    clearTimeout(forced);
+    // taskkill /T walks the tree from a live parent only; a tree whose parent has gone is out of reach
+    if (child.exitCode !== null) return;
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    await Promise.race([exited, delay(5000)]);
     return;
   }
-  await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
+  const signalGroup = (signal: NodeJS.Signals | 0): boolean => {
+    try {
+      process.kill(-pid, signal);
+      return true;
+    } catch {
+      return false; // no such group: not started detached, or everything in it has gone
+    }
+  };
+  if (!signalGroup('SIGTERM')) {
+    if (child.exitCode === null) child.kill('SIGTERM');
+    await Promise.race([exited, delay(5000)]);
+    if (child.exitCode === null) child.kill('SIGKILL');
+    return;
+  }
+  // Give the group a moment to shut down cleanly (an ASP.NET app flushes its logs), then force it
+  const deadline = Date.now() + 5000;
+  while (signalGroup(0) && Date.now() < deadline) await delay(100);
+  signalGroup('SIGKILL');
 }
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function pipeLines(stream: NodeJS.ReadableStream, onLine: (line: string) => void): void {
   let buffer = '';
