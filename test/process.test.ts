@@ -6,7 +6,7 @@ describe('runCommand', () => {
   // runCommand returned but the process could never exit (a CI job hung for an hour on dotnet)
   it.skipIf(isWindows)('stops what the command left running in the background', async () => {
     const started = Date.now();
-    const result = await runCommand('sleep 30 & echo $! > /dev/stderr; echo done', { cwd: process.cwd(), env: buildEnv([]) });
+    const result = await runCommand('sleep 30 & echo $! >&2; echo done', { cwd: process.cwd(), env: buildEnv([]) });
     expect(result.code).toBe(0);
     expect(result.output).toContain('done');
     const straggler = Number(result.output.find((line) => /^\d+$/.test(line)));
