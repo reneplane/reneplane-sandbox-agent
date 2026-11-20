@@ -84,6 +84,30 @@ function closedSession(attemptId: string, minutesAgo = 30) {
   writeMeta({ ...target(attemptId), missionId: 'm', variantId: 'v', activeAt: new Date(Date.now() - minutesAgo * 60_000).toISOString(), unsyncedSince: null });
 }
 
+describe('starter bundles', () => {
+  // The plan (workspace.yaml) and the boot (the repo) both load the bundle; loading it twice at once
+  // had the second unpack delete the first one's staging folder mid-tar
+  it('loads once when asked from several places at the same time', async () => {
+    const { BundleSource } = await import('../src/mission/source.js');
+    const { tarGz } = await import('../src/util/tar.js');
+    const { createHash } = await import('node:crypto');
+    const { pathToFileURL } = await import('node:url');
+    const manifest = { format: 1, codebank: 'shopkart', release: 'v1', problem: 'SHOP-142', variant: 'node-postgres', kind: 'app', branch: 'main', startCommit: 'a'.repeat(40) };
+    const archive = tarGz([
+      { path: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) },
+      { path: 'workspace.yaml', data: Buffer.from('services: {}\n') },
+    ]);
+    const file = join(home, 'starter.tar.gz');
+    writeFileSync(file, archive);
+    const sha256 = createHash('sha256').update(archive).digest('hex');
+    const source = new BundleSource({ url: pathToFileURL(file).href, sha256 }, { dir: join(sessionDir('att_bundle'), 'bundle'), dev: true, allowedHosts: [] });
+    const [first, workspace, again] = await Promise.all([source.ensure(), source.workspaceText(), source.ensure()]);
+    expect(first.problem).toBe('SHOP-142');
+    expect(again).toBe(first);
+    expect(workspace).toBe('services: {}\n');
+  });
+});
+
 describe('the session sweeper', () => {
   it('saves and deletes closed sessions, keeps offline ones, and turns replaced ones into patches', async () => {
     closedSession('att_saves0000000003');

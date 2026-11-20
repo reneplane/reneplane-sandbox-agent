@@ -121,7 +121,7 @@ export const START_TAG = 'reneplane-start';
 export class BundleSource implements MissionSource {
   readonly key: string;
   readonly baseRef = START_TAG;
-  private manifestCache: BundleManifest | null = null;
+  private loading: Promise<BundleManifest> | null = null;
 
   constructor(
     private readonly bundle: BundleRef,
@@ -132,9 +132,19 @@ export class BundleSource implements MissionSource {
     checkBundleUrl(bundle.url, options);
   }
 
-  /** Download (once, cached by sha256), verify and unpack */
-  async ensure(): Promise<BundleManifest> {
-    if (this.manifestCache) return this.manifestCache;
+  /**
+   * Download (once, cached by sha256), verify and unpack. One load at a time: the plan and the boot
+   * both ask, and two unpacks into the same folder delete each other's staging folder.
+   */
+  ensure(): Promise<BundleManifest> {
+    this.loading ??= this.load().catch((error: unknown) => {
+      this.loading = null;
+      throw error;
+    });
+    return this.loading;
+  }
+
+  private async load(): Promise<BundleManifest> {
     const { dir } = this.options;
     if (!existsSync(join(dir, 'manifest.json'))) {
       const cached = join(PATHS.bundles, `${this.bundle.sha256}.tar.gz`);
@@ -145,7 +155,6 @@ export class BundleSource implements MissionSource {
     }
     const manifest = BundleManifest.safeParse(JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')));
     if (!manifest.success) throw new AgentError('failed', `The starter bundle's manifest is invalid: ${manifest.error.issues[0]?.message}`);
-    this.manifestCache = manifest.data;
     return manifest.data;
   }
 
