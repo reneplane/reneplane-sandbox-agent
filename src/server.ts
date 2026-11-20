@@ -8,7 +8,7 @@ import { runDoctor } from './doctor.js';
 import { createLogger } from './log.js';
 import { MissionManager, type MissionClient } from './mission/manager.js';
 import type { MissionOptions } from './mission/mission.js';
-import { addPendingPairing, authenticate } from './pairing.js';
+import { addPendingPairing, authenticate, isWellFormedToken } from './pairing.js';
 import { cacheUsage } from './cache.js';
 import { addPack, isPackId, listPacks, removePack, type PackId } from './packs/index.js';
 import { sessionsOnDisk } from './session/store.js';
@@ -67,7 +67,14 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
   const hostOk = (host: string | undefined) => isAllowedHost(host, port) || (cloud?.publicHost !== null && cloud?.publicHost !== undefined && host === cloud.publicHost);
 
   const policy = () => ({ dev: options.dev, allowPreviewOrigins: loadConfig().allowPreviewOrigins });
-  const server: Server = createServer((request, response) => void handleHttp(request, response));
+  // A request that fails answers 500; it must never take the agent (and the learner's mission) down
+  const server: Server = createServer((request, response) =>
+    void handleHttp(request, response).catch((error: Error) => {
+      log.warn(`HTTP ${request.method} ${request.url} failed`, error.message);
+      if (!response.headersSent) json(response, 500, { error: 'internal error' });
+      else response.end();
+    }),
+  );
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 10 * 1024 * 1024 });
 
   async function handleHttp(request: IncomingMessage, response: ServerResponse) {
@@ -86,7 +93,9 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
         return json(response, 200, { agent: 'reneplane-local', version: AGENT_VERSION, port, pid: process.pid, mission: mission?.attemptId ?? null, packsInUse: manager.packsInUse() });
       }
       if (url.pathname === '/control/pair') {
-        addPendingPairing(String((JSON.parse(body || '{}') as { token?: string }).token ?? ''));
+        const token = String((JSON.parse(body || '{}') as { token?: string }).token ?? '');
+        if (!isWellFormedToken(token)) return json(response, 400, { error: 'That pairing token is not valid' });
+        addPendingPairing(token);
         return json(response, 200, { ok: true });
       }
       if (url.pathname === '/control/stop') {

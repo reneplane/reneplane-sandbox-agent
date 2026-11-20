@@ -6,7 +6,7 @@ import { loadConfig, PATHS, updateConfig } from './config.js';
 import { runDoctor } from './doctor.js';
 import { launchScript, managedByService, redeemDevice, setup, startManaged, unregisterAutostart } from './install.js';
 import { createLogger, logToConsole } from './log.js';
-import { addPendingPairing } from './pairing.js';
+import { addPendingPairing, isWellFormedToken } from './pairing.js';
 import { STATUS_FILE, startServer } from './server.js';
 import { downloadUpdate, pruneOldVersions, RESTART_EXIT_CODE, switchTo } from './update.js';
 import { AGENT_VERSION } from './version.js';
@@ -217,6 +217,11 @@ async function main(): Promise<void> {
 
     case 'pair': {
       const token = rest[0] ?? '';
+      if (!isWellFormedToken(token)) {
+        console.error('That pairing token is not valid. Copy the whole command from the workspace tab again.');
+        process.exitCode = 2;
+        return;
+      }
       // Prefer telling the running agent; fall back to the config file it reads on every hello
       if (!(await control('pair', { token }))) addPendingPairing(token);
       console.log('Paired. Go back to the workspace tab.');
@@ -242,7 +247,15 @@ async function main(): Promise<void> {
         console.log(`allowPreviewOrigins = ${value}`);
         return;
       }
-      console.error('Usage: reneplane-local config set allowPreviewOrigins true|false');
+      // The download cache's limit, in GB (it's trimmed to this after a mission closes, and daily)
+      if (action === 'set' && key === 'cacheCapGB' && /^\d{1,3}$/.test(value ?? '') && Number(value) >= 1 && Number(value) <= 200) {
+        updateConfig((config) => {
+          config.cacheCapGB = Number(value);
+        });
+        console.log(`cacheCapGB = ${value}`);
+        return;
+      }
+      console.error('Usage: reneplane-local config set allowPreviewOrigins true|false\n       reneplane-local config set cacheCapGB <1-200>');
       process.exitCode = 2;
       return;
     }
