@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSy
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const home = mkdtempSync(join(tmpdir(), 'reneplane-test-'));
 process.env.RENEPLANE_HOME = home;
@@ -136,8 +136,13 @@ describe('the cache cap', () => {
       mkdirSync(join(PATHS.cache, dir), { recursive: true });
       writeFileSync(join(PATHS.cache, dir, 'package.tgz'), 'x'.repeat(size));
     }
+    // Distinct times: two calls in one millisecond would tie
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-11-20T10:00:00Z'));
     recordUse(['jdk21-maven']);
+    vi.setSystemTime(Date.parse('2026-11-20T10:05:00Z'));
     recordUse(['node22']); // npm used most recently
+    vi.useRealTimers();
     expect(enforceCap(true)).toEqual([]);
     // Never used (uv) goes first, then the older (Maven); npm last, and only because the cap is tiny
     expect(enforceCap(false)).toEqual(['uv', 'maven', 'npm']);

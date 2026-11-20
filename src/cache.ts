@@ -73,7 +73,8 @@ export function enforceCap(sessionOpen: boolean): string[] {
   let total = current.bytes;
   const candidates = current.ecosystems
     .filter((item): item is (typeof current.ecosystems)[number] & { name: Ecosystem } => item.name !== 'bundles' && item.bytes > 0)
-    .sort((a, b) => (a.lastUsed ?? '').localeCompare(b.lastUsed ?? ''));
+    // Least recently used first (never used before anything); equally recent: the larger, which frees more
+    .sort((a, b) => (a.lastUsed ?? '').localeCompare(b.lastUsed ?? '') || b.bytes - a.bytes || a.name.localeCompare(b.name));
   for (const item of candidates) {
     if (total <= current.capBytes) break;
     try {
