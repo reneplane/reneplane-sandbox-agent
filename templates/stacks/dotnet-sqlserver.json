@@ -1,0 +1,11 @@
+{
+  "adapter": "dotnet",
+  "label": ".NET · ASP.NET Core · SQL Server",
+  "engine": "sqlserver",
+  "seed": "db/seed.sqlserver.sql",
+  "template": {
+    "run": "dotnet tool restore && dotnet restore Notes.sln && dotnet ef migrations script --idempotent --project Notes.Api --output \"{{out}}\"",
+    "cwd": "backend",
+    "env": { "DATABASE_URL": "Server=tcp:localhost,1433;Database=notes;User Id=design;Password=design-time-only;Encrypt=True" }
+  }
+}

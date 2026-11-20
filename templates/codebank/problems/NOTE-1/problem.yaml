@@ -1,0 +1,42 @@
+# NOTE-1, an example problem to copy. This bug never existed in the codebank's history, so each stack
+# describes its starter with <stack>/break.patch (applied forward to main). A real problem is usually one
+# squashed commit with the trailers "Reneplane-Problem: NOTE-1" and "Reneplane-Type: bug" instead
+# (docs/CODEBANK.md in reneplane-sandbox-agent).
+id: NOTE-1
+slug: note-1-pinned-notes
+kind: app
+type: bug
+title: Pinned notes don't stay on top
+difficulty: easy
+skills:
+  - SQL ORDER BY
+  - API contracts
+brief: brief.md
+branch: bug/note-1
+preview: /
+minAgentVersion: 0.3.0
+stacks:
+  node-postgres:
+    allow:
+      - backend/src/**
+      - backend/test/**
+      - db/migrations/*.sql
+      - frontend/src/**
+  python-postgres:
+    allow:
+      - backend/app/**
+      - backend/alembic/versions/*.py
+      - backend/tests/**
+      - frontend/src/**
+  java-mysql:
+    allow:
+      - backend/src/main/java/**
+      - backend/src/main/resources/db/migration/*.sql
+      - backend/src/test/**
+      - frontend/src/**
+  dotnet-sqlserver:
+    allow:
+      - backend/Notes.Api/**/*.cs
+      - backend/Notes.Tests/**/*.cs
+      - frontend/src/**
+hidden: hidden/behaviours.mjs

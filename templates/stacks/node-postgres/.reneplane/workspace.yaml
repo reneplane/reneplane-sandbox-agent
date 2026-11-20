@@ -1,0 +1,71 @@
+# How Reneplane runs this codebase on the learner's computer. Read by Reneplane Local from the
+# mission's pinned tag (edits in a working copy have no effect).
+version: 1
+name: notes
+branch: main
+
+runtimes:
+  node: "22"
+
+database:
+  engine: postgres
+  name: notes
+  seed: db/seed.sql
+
+setup:
+  - name: Installing the backend's dependencies
+    cwd: backend
+    run: npm ci --no-audit --no-fund --loglevel=error
+    inputs: [backend/package-lock.json]
+  - name: Installing the frontend's dependencies
+    cwd: frontend
+    run: npm ci --no-audit --no-fund --loglevel=error
+    inputs: [frontend/package-lock.json]
+
+migrate:
+  cwd: backend
+  run: npm run migrate
+  applied: "^applied (\\S+)$"
+
+services:
+  backend:
+    label: Express
+    cwd: backend
+    run: npm run dev
+    port: 8000
+    ready: /api/health
+  frontend:
+    label: Vite
+    cwd: frontend
+    run: npm run dev -- --port {{ports.frontend}} --strictPort
+    port: 5173
+    ready: /
+
+# The IDE's debugger (F5): the backend runs with Node's inspector open instead of tsx watch, and
+# restarts when its sources change
+debug:
+  adapter: node
+  run: node --inspect=127.0.0.1:{{ports.debug}} --import tsx src/server.ts
+  restartOn: [backend/src/]
+
+test:
+  - name: Backend tests
+    layer: backend
+    cwd: backend
+    run: npx vitest run --reporter=default --reporter=junit --outputFile.junit={{out}}/backend.xml
+    junit: "{{out}}/backend.xml"
+  - name: Frontend tests
+    layer: frontend
+    cwd: frontend
+    run: npx vitest run --reporter=default --reporter=junit --outputFile.junit={{out}}/frontend.xml
+    junit: "{{out}}/frontend.xml"
+
+preview:
+  service: frontend
+  path: /
+
+env:
+  DATABASE_URL: postgres://{{db.user}}:{{db.password}}@{{db.host}}:{{db.port}}/{{db.name}}
+  TEST_DATABASE_URL: postgres://{{db.user}}:{{db.password}}@{{db.host}}:{{db.port}}/{{db.testName}}
+  PORT: "{{ports.backend}}"
+  BACKEND_URL: "{{url.backend}}"

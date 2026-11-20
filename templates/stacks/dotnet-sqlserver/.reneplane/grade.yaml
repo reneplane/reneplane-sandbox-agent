@@ -1,0 +1,47 @@
+# How the grader builds and runs this stack (never shipped to learners). "prepare" runs on the pristine
+# starter with internet; everything after the learner's patch runs without it.
+images:
+  backend: mcr.microsoft.com/dotnet/sdk:10.0.404-noble
+  frontend: node:22.23.5-bookworm-slim
+env:
+  DOTNET_CLI_HOME: /cache/dotnet-home
+  NUGET_PACKAGES: /cache/nuget
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
+  DOTNET_GENERATE_ASPNET_CERTIFICATE: "false"
+prepare:
+  - name: Restoring the backend's packages
+    image: backend
+    cwd: backend
+    run: dotnet tool restore && dotnet restore Notes.Api/Notes.Api.csproj
+  - name: Installing frontend dependencies
+    image: frontend
+    cwd: frontend
+    run: npm ci --no-audit --no-fund --loglevel=error
+build:
+  - name: Building the backend
+    image: backend
+    cwd: backend
+    run: dotnet build Notes.Api/Notes.Api.csproj --no-restore -nologo -v q
+      -clp:ErrorsOnly
+  - name: Building the frontend
+    image: frontend
+    cwd: frontend
+    run: npx vite build --logLevel warn
+migrate:
+  image: backend
+  cwd: backend
+  run: dotnet ef database update --no-build --project Notes.Api
+  applied: Applying migration '([^']+)'
+services:
+  backend:
+    image: backend
+    cwd: backend/Notes.Api
+    run: dotnet run --no-build --no-restore --no-launch-profile
+    ready: http://127.0.0.1:8000/api/health
+  frontend:
+    image: frontend
+    cwd: frontend
+    run: npx vite preview --port 5173 --strictPort
+    ready: http://127.0.0.1:5173/

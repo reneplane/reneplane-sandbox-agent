@@ -1,0 +1,1 @@
+{ "adapter": "node", "label": "Node · Express · PostgreSQL", "engine": "postgres", "seed": "db/seed.sql" }

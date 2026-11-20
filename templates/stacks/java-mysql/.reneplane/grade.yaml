@@ -1,0 +1,46 @@
+# How the grader builds and runs this stack (never shipped to learners). "prepare" runs on the pristine
+# starter with internet; everything after the learner's patch runs without it.
+images:
+  backend: maven:3.9.16-eclipse-temurin-21-noble
+  frontend: node:22.23.5-bookworm-slim
+env:
+  MAVEN_CONFIG: /cache/home/.m2
+  MAVEN_ARGS: -B --no-transfer-progress -Dmaven.repo.local=/cache/m2
+prepare:
+  - name: Building the existing backend (Maven and libraries)
+    image: backend
+    cwd: backend
+    run: mvn -q -DskipTests package
+  - name: Applying the existing migrations
+    image: backend
+    cwd: backend
+    run: mvn -q flyway:migrate
+  - name: Installing frontend dependencies
+    image: frontend
+    cwd: frontend
+    run: npm ci --no-audit --no-fund --loglevel=error
+build:
+  - name: Building the backend
+    image: backend
+    cwd: backend
+    run: mvn -o -q -DskipTests package
+  - name: Building the frontend
+    image: frontend
+    cwd: frontend
+    run: npx vite build --logLevel warn
+migrate:
+  image: backend
+  cwd: backend
+  run: mvn -o flyway:migrate
+  applied: Migrating schema .* to version "([^"]+)"
+services:
+  backend:
+    image: backend
+    cwd: backend
+    run: exec java -jar target/notes-backend-0.1.0.jar
+    ready: http://127.0.0.1:8000/api/health
+  frontend:
+    image: frontend
+    cwd: frontend
+    run: npx vite preview --port 5173 --strictPort
+    ready: http://127.0.0.1:5173/

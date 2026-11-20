@@ -1,0 +1,77 @@
+# How Reneplane runs this codebase on the learner's computer. Read by Reneplane Local from the
+# mission's pinned tag (edits in a working copy have no effect).
+version: 1
+name: notes
+branch: main
+
+runtimes:
+  python: "3.12"
+  node: "22"
+
+database:
+  engine: postgres
+  name: notes
+  seed: db/seed.sql
+
+setup:
+  - name: Setting up Python 3.12
+    cwd: backend
+    run: uv python install 3.12
+  - name: Installing backend dependencies
+    cwd: backend
+    run: uv sync --frozen
+    inputs: [backend/uv.lock]
+  - name: Installing frontend dependencies
+    cwd: frontend
+    run: npm ci --no-audit --no-fund --loglevel=error
+    inputs: [frontend/package-lock.json]
+
+migrate:
+  cwd: backend
+  run: uv run --frozen alembic upgrade head
+  applied: "Running upgrade .*?-> ([^,\\s]+)"
+
+services:
+  backend:
+    label: FastAPI
+    cwd: backend
+    run: uv run --frozen uvicorn app.main:app --host 127.0.0.1 --port {{ports.backend}} --reload
+    port: 8000
+    ready: /api/health
+  frontend:
+    label: Vite
+    cwd: frontend
+    run: npm run dev -- --port {{ports.frontend}} --strictPort
+    port: 5173
+    ready: /
+
+# The IDE's debugger (F5): uvicorn runs under debugpy instead of --reload, and restarts when the app
+# changes. Reneplane Local puts debugpy on PYTHONPATH; it isn't a project dependency.
+debug:
+  adapter: python
+  run: uv run --frozen python -Xfrozen_modules=off -m debugpy --listen 127.0.0.1:{{ports.debug}} -m uvicorn app.main:app --host 127.0.0.1 --port {{ports.backend}}
+  env:
+    PYDEVD_DISABLE_FILE_VALIDATION: "1"
+  restartOn: [backend/app/]
+
+test:
+  - name: Backend tests (pytest)
+    layer: backend
+    cwd: backend
+    run: uv run --frozen pytest -q --junitxml={{out}}/backend.xml
+    junit: "{{out}}/backend.xml"
+  - name: Frontend tests
+    layer: frontend
+    cwd: frontend
+    run: npx vitest run --reporter=default --reporter=junit --outputFile.junit={{out}}/frontend.xml
+    junit: "{{out}}/frontend.xml"
+
+preview:
+  service: frontend
+  path: /
+
+env:
+  DATABASE_URL: postgresql+psycopg://{{db.user}}:{{db.password}}@{{db.host}}:{{db.port}}/{{db.name}}
+  TEST_DATABASE_URL: postgresql+psycopg://{{db.user}}:{{db.password}}@{{db.host}}:{{db.port}}/{{db.testName}}
+  BACKEND_URL: "{{url.backend}}"
+  PYTHONUTF8: "1"

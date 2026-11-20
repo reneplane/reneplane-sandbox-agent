@@ -1,0 +1,83 @@
+# How Reneplane runs this codebase on the learner's computer. Read by Reneplane Local from the
+# mission's pinned tag (edits in a working copy have no effect).
+#
+# SQL Server comes from Reneplane's database pool (Azure SQL): one leased database per session, already
+# loaded with the starter's schema and seed. The tests share it with the app and reset its rows.
+version: 1
+name: notes
+branch: main
+
+runtimes:
+  dotnet: "10"
+  node: "22"
+
+database:
+  engine: sqlserver
+  name: notes
+
+setup:
+  - name: Restoring the backend's packages
+    cwd: backend
+    run: dotnet tool restore && dotnet restore Notes.sln
+    inputs: [backend/Notes.Api/Notes.Api.csproj, backend/Notes.Tests/Notes.Tests.csproj, backend/.config/dotnet-tools.json]
+  - name: Installing frontend dependencies
+    cwd: frontend
+    run: npm ci --no-audit --no-fund --loglevel=error
+    inputs: [frontend/package-lock.json]
+
+migrate:
+  cwd: backend
+  run: dotnet ef database update --project Notes.Api
+  applied: "Applying migration '([^']+)'"
+
+services:
+  backend:
+    label: ASP.NET Core
+    cwd: backend/Notes.Api
+    run: dotnet watch run --non-interactive
+    port: 8000
+    ready: /api/health
+    env:
+      # The running server builds into its own folder, so `dotnet test` and `dotnet ef` never find bin/ locked
+      UseArtifactsOutput: "true"
+      ArtifactsPath: "{{repo}}/.reneplane-out/run"
+  frontend:
+    label: Vite
+    cwd: frontend
+    run: npm run dev -- --port {{ports.frontend}} --strictPort
+    port: 5173
+    ready: /
+
+# The IDE's debugger (F5): a debug build in its own folder, launched by netcoredbg instead of
+# dotnet watch. Rebuilds and restarts when the backend's sources change.
+debug:
+  adapter: dotnet
+  cwd: backend/Notes.Api
+  build: dotnet build --artifacts-path "{{repo}}/.reneplane-out/debug" -nologo -v q
+  program: "{{repo}}/.reneplane-out/debug/bin/Notes.Api/debug/Notes.Api.dll"
+  restartOn: [backend/Notes.Api/]
+
+test:
+  - name: Backend tests (xUnit)
+    layer: backend
+    cwd: backend
+    # Its own build folder: the running server and its file watcher are left alone
+    run: dotnet test Notes.sln --artifacts-path "{{repo}}/.reneplane-out/test" --results-directory "{{out}}" --logger "trx;LogFileName=backend.trx"
+    junit: "{{out}}/backend.trx"
+  - name: Frontend tests
+    layer: frontend
+    cwd: frontend
+    run: npx vitest run --reporter=default --reporter=junit --outputFile.junit={{out}}/frontend.xml
+    junit: "{{out}}/frontend.xml"
+
+preview:
+  service: frontend
+  path: /
+
+env:
+  DATABASE_URL: "Server=tcp:{{db.host}},{{db.port}};Database={{db.name}};User Id={{db.user}};Password={{db.password}};{{db.tls}}"
+  TEST_DATABASE_URL: "Server=tcp:{{db.host}},{{db.port}};Database={{db.testName}};User Id={{db.user}};Password={{db.password}};{{db.tls}}"
+  PORT: "{{ports.backend}}"
+  BACKEND_URL: "{{url.backend}}"
+  DOTNET_WATCH_RESTART_ON_RUDE_EDIT: "true"
+  DOTNET_WATCH_SUPPRESS_LAUNCH_BROWSER: "true"

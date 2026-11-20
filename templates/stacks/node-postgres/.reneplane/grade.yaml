@@ -1,0 +1,39 @@
+# How the grader builds and runs this stack (never shipped to learners). "prepare" runs on the pristine
+# starter with internet; everything after the learner's patch runs without it.
+images:
+  backend: node:22.23.5-bookworm-slim
+  frontend: node:22.23.5-bookworm-slim
+prepare:
+  - name: Installing backend dependencies
+    image: backend
+    cwd: backend
+    run: npm ci --no-audit --no-fund --loglevel=error
+  - name: Installing frontend dependencies
+    image: frontend
+    cwd: frontend
+    run: npm ci --no-audit --no-fund --loglevel=error
+  - name: Applying the existing migrations
+    image: backend
+    cwd: backend
+    run: npm run migrate
+build:
+  - name: Building the frontend
+    image: frontend
+    cwd: frontend
+    run: npx vite build --logLevel warn
+migrate:
+  image: backend
+  cwd: backend
+  run: npm run migrate
+  applied: ^applied (\S+)$
+services:
+  backend:
+    image: backend
+    cwd: backend
+    run: npx tsx src/server.ts
+    ready: http://127.0.0.1:8000/api/health
+  frontend:
+    image: frontend
+    cwd: frontend
+    run: npx vite preview --port 5173 --strictPort
+    ready: http://127.0.0.1:5173/

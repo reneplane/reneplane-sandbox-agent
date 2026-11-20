@@ -1,0 +1,17 @@
+diff --git a/backend/src/main/java/com/notes/notes/NotesController.java b/backend/src/main/java/com/notes/notes/NotesController.java
+index af48d84..6a4ba7d 100644
+--- a/backend/src/main/java/com/notes/notes/NotesController.java
++++ b/backend/src/main/java/com/notes/notes/NotesController.java
+@@ -20,10 +20,10 @@ public class NotesController {
+     this.jdbc = jdbc;
+   }
+ 
+-  /** Pinned notes first, then the newest */
++  /** The newest first */
+   @GetMapping("/notes")
+   public List<Map<String, Object>> list() {
+-    return jdbc.queryForList("SELECT " + COLUMNS + " FROM notes ORDER BY pinned DESC, created_at DESC, id DESC");
++    return jdbc.queryForList("SELECT " + COLUMNS + " FROM notes ORDER BY created_at DESC, id DESC");
+   }
+ 
+   @PostMapping("/notes/{id}/pin")

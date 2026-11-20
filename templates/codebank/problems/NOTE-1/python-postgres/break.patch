@@ -1,0 +1,16 @@
+diff --git a/backend/app/services/notes.py b/backend/app/services/notes.py
+index 8cafd96..e7ac8b5 100644
+--- a/backend/app/services/notes.py
++++ b/backend/app/services/notes.py
+@@ -7,9 +7,9 @@ COLUMNS = "id, title, body, pinned, created_at"
+ 
+ 
+ def list_notes() -> list[dict]:
+-    """Pinned notes first, then the newest"""
++    """The newest first"""
+     with connection() as conn:
+-        rows = conn.execute(text(f"SELECT {COLUMNS} FROM notes ORDER BY pinned DESC, created_at DESC, id DESC"))
++        rows = conn.execute(text(f"SELECT {COLUMNS} FROM notes ORDER BY created_at DESC, id DESC"))
+         return [dict(row) for row in rows.mappings()]
+ 
+ 

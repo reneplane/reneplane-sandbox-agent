@@ -1,0 +1,77 @@
+# How Reneplane runs this codebase on the learner's computer. Read by Reneplane Local from the
+# mission's pinned tag (edits in a working copy have no effect).
+version: 1
+name: notes
+branch: main
+
+runtimes:
+  java: "21"
+  node: "22"
+
+database:
+  engine: mysql
+  name: notes
+  seed: db/seed.mysql.sql
+
+setup:
+  - name: Building the backend (downloads Maven and libraries the first time)
+    cwd: backend
+    run: mvn -B --no-transfer-progress -q -DskipTests test-compile
+    inputs: [backend/pom.xml]
+  - name: Installing frontend dependencies
+    cwd: frontend
+    run: npm ci --no-audit --no-fund --loglevel=error
+    inputs: [frontend/package-lock.json]
+
+migrate:
+  cwd: backend
+  run: mvn -B --no-transfer-progress flyway:migrate
+  applied: 'Migrating schema .* to version "([^"]+)"'
+
+services:
+  backend:
+    label: Spring Boot
+    cwd: backend
+    run: mvn -B --no-transfer-progress -q spring-boot:run
+    port: 8000
+    ready: /api/health
+    # Spring Boot under Maven doesn't reload by itself: restart it when the backend's sources change
+    restartOn: [backend/src/main/]
+  frontend:
+    label: Vite
+    cwd: frontend
+    run: npm run dev -- --port {{ports.frontend}} --strictPort
+    port: 5173
+    ready: /
+
+# The IDE's debugger (F5): the JVM starts with its debug port open (JDWP); classes map to the files
+# under sourceRoots. Restarts when the backend's sources change.
+debug:
+  adapter: java
+  run: mvn -B --no-transfer-progress -q spring-boot:run "-Dspring-boot.run.jvmArguments=-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:{{ports.debug}}"
+  sourceRoots: [backend/src/main/java]
+  restartOn: [backend/src/main/]
+
+test:
+  - name: Backend tests (JUnit)
+    layer: backend
+    cwd: backend
+    run: mvn -B --no-transfer-progress test
+    junit: backend/target/surefire-reports
+  - name: Frontend tests
+    layer: frontend
+    cwd: frontend
+    run: npx vitest run --reporter=default --reporter=junit --outputFile.junit={{out}}/frontend.xml
+    junit: "{{out}}/frontend.xml"
+
+preview:
+  service: frontend
+  path: /
+
+env:
+  DATABASE_URL: jdbc:mysql://{{db.host}}:{{db.port}}/{{db.name}}?allowPublicKeyRetrieval=true&useSSL=false
+  TEST_DATABASE_URL: jdbc:mysql://{{db.host}}:{{db.port}}/{{db.testName}}?allowPublicKeyRetrieval=true&useSSL=false
+  DB_USER: "{{db.user}}"
+  DB_PASSWORD: "{{db.password}}"
+  SERVER_PORT: "{{ports.backend}}"
+  BACKEND_URL: "{{url.backend}}"

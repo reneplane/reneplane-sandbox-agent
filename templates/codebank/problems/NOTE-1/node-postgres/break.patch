@@ -1,0 +1,16 @@
+diff --git a/backend/src/services/notes.service.ts b/backend/src/services/notes.service.ts
+index 9ed0458..66a9eb1 100644
+--- a/backend/src/services/notes.service.ts
++++ b/backend/src/services/notes.service.ts
+@@ -9,9 +9,9 @@ export interface Note {
+   created_at: string;
+ }
+ 
+-/** Pinned notes first, then the newest */
++/** The newest first */
+ export async function listNotes(): Promise<Note[]> {
+-  const { rows } = await db.query(`SELECT id, title, body, pinned, created_at FROM notes ORDER BY pinned DESC, created_at DESC, id DESC`);
++  const { rows } = await db.query(`SELECT id, title, body, pinned, created_at FROM notes ORDER BY created_at DESC, id DESC`);
+   return rows;
+ }
+ 

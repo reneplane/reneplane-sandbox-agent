@@ -1,0 +1,16 @@
+diff --git a/backend/Notes.Api/Program.cs b/backend/Notes.Api/Program.cs
+index afdde99..f5a9192 100644
+--- a/backend/Notes.Api/Program.cs
++++ b/backend/Notes.Api/Program.cs
+@@ -34,9 +34,9 @@ app.Use(async (context, next) =>
+ 
+ app.MapGet("/api/health", () => new { ok = true });
+ 
+-// Pinned notes first, then the newest
++// The newest first
+ app.MapGet("/api/notes", async (NotesDb db) =>
+-    await db.Notes.OrderByDescending(n => n.Pinned).ThenByDescending(n => n.CreatedAt).ThenByDescending(n => n.Id).ToListAsync());
++    await db.Notes.OrderByDescending(n => n.CreatedAt).ThenByDescending(n => n.Id).ToListAsync());
+ 
+ app.MapPost("/api/notes/{id:int}/pin", (int id, NotesDb db) => SetPinned(db, id, true));
+ app.MapPost("/api/notes/{id:int}/unpin", (int id, NotesDb db) => SetPinned(db, id, false));

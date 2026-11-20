@@ -1,0 +1,11 @@
+body { font-family: system-ui, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }
+.site-header { display: flex; align-items: center; padding: 1rem 2rem; background: #fff; border-bottom: 1px solid #e2e8f0; }
+.logo { font-weight: 800; color: #2563eb; }
+main { max-width: 720px; padding: 2rem; }
+.notes { display: flex; flex-direction: column; gap: 12px; padding: 0; list-style: none; }
+.note { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 1rem 1.25rem; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; }
+.note.pinned { border-color: #93c5fd; background: #eff6ff; }
+.note h2 { margin: 0 0 4px; font-size: 16px; }
+.note p { margin: 0; color: #475569; }
+.badge { margin-left: 6px; padding: 2px 8px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; font-size: 12px; font-weight: 600; }
+button { border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; padding: 6px 12px; cursor: pointer; }

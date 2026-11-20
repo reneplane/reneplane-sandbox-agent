@@ -1,0 +1,1 @@
+{ "adapter": "java-maven", "label": "Java · Spring Boot · MySQL", "engine": "mysql", "seed": "db/seed.mysql.sql" }

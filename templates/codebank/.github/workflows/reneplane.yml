@@ -1,0 +1,50 @@
+# Reneplane: is this codebank fit for the workspace, and on release tags, ship it.
+#   push to main   structure check (seconds), reported to the engine: the admin portal shows its health
+#   pull request   full check of the stacks the PR changes (every stack if shared files change)
+#   tag v*         full check, then compile and upload the release; the grader verifies each problem
+#                  and it appears in the admin portal as a draft. Tags with -rc go to staging.
+name: Reneplane
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+  id-token: write # the engine knows this repository by its GitHub OIDC token; no secrets here
+
+concurrency:
+  group: reneplane-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  reneplane:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # problems are found by their commits' trailers
+
+      - name: What this pull request touches
+        id: scope
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != pull_request ]; then echo "level=$([ "${{ github.ref_type }}" = tag ] && echo full || echo quick)" >> "$GITHUB_OUTPUT"; exit 0; fi
+          files=$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)
+          code=$(echo "$files" | grep -vE '(^\.github/|\.md$)' || true)
+          if [ -z "$code" ]; then echo "level=quick" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "level=full" >> "$GITHUB_OUTPUT"
+          # Only stacks/<id>/ changed: boot just those; anything shared: every stack
+          if ! echo "$code" | grep -qvE '^stacks/[^/]+/'; then
+            echo "stacks=$(echo "$code" | cut -d/ -f2 | sort -u | paste -sd, -)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: reneplane/reneplane-sandbox-agent/codebank@main
+        with:
+          mode: ${{ github.ref_type == 'tag' && 'release' || 'check' }}
+          level: ${{ steps.scope.outputs.level }}
+          stacks: ${{ steps.scope.outputs.stacks }}
+          engine: ${{ contains(github.ref_name, '-rc') && 'https://reneplane-engine-staging.reneplane.workers.dev' || 'https://reneplane-engine.reneplane.workers.dev' }}

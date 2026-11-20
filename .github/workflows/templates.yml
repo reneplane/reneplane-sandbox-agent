@@ -1,0 +1,62 @@
+# The codebank templates, as an author gets them from `reneplane-local codebank init`, must pass the
+# full check: every stack's healthy product boots and passes its tests, and the example problem's
+# starter fails and its reference passes. Runs when the templates or what they depend on change.
+name: Codebank templates
+
+on:
+  pull_request:
+    paths: [templates/**, src/codebank/**, src/mission/**, src/runtimes/**, src/packs/**, src/db/**, .github/workflows/templates.yml]
+  push:
+    branches: [main]
+    paths: [templates/**, src/codebank/**, src/mission/**, src/runtimes/**, src/packs/**, src/db/**, .github/workflows/templates.yml]
+
+jobs:
+  templates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Where the agent keeps its runtimes
+        run: echo "RENEPLANE_HOME=$HOME/.reneplane-ci" >> "$GITHUB_ENV"
+
+      # Ubuntu 24.04 renamed libaio; the portable MySQL still looks for libaio.so.1
+      - name: MySQL's libaio
+        run: |
+          if ! ldconfig -p | grep -q 'libaio.so.1 '; then
+            sudo apt-get install -y -qq libaio1t64 >/dev/null
+            sudo ln -sf /usr/lib/x86_64-linux-gnu/libaio.so.1t64 /usr/lib/x86_64-linux-gnu/libaio.so.1
+          fi
+      - name: Which runtimes are pinned
+        id: pinned
+        run: echo "key=$(sha256sum src/runtimes/manifest.json | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - name: Cache stack packs
+        uses: actions/cache@v4
+        with:
+          path: ~/.reneplane-ci/runtimes
+          key: reneplane-packs-${{ runner.os }}-${{ steps.pinned.outputs.key }}
+
+      - name: A codebank from every template
+        run: |
+          stacks=()
+          for dir in templates/stacks/*/; do stacks+=(--stack "$(basename "$dir")"); done
+          npx tsx src/main.ts codebank init "$RUNNER_TEMP/notes" --name Notes "${stacks[@]}"
+          cd "$RUNNER_TEMP/notes"
+          git init -q -b main
+          git add -A
+          git -c user.name=CI -c user.email=ci@example.com commit -q -m "Initial import"
+
+      - name: codebank check --full
+        run: npx tsx src/main.ts codebank check --full --dir "$RUNNER_TEMP/notes" --json "$RUNNER_TEMP/report.json"
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: templates-report
+          path: ${{ runner.temp }}/report.json
+          if-no-files-found: ignore

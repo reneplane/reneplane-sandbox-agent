@@ -217,3 +217,26 @@ describe('bundles', () => {
     expect(readFileSync(join(dir, 'b.txt'), 'utf8')).toBe('second');
   });
 });
+
+describe('codebank init', () => {
+  // The templates are the starting point an author gets; the full check of all four runs in CI
+  // (.github/workflows/templates.yml). Here: the files fit together and pass the structure check.
+  it('creates a codebank from the chosen templates that passes the structure check', async () => {
+    const { initCodebank, availableTemplates } = await import('../src/codebank/init.js');
+    expect(availableTemplates()).toEqual(['dotnet-sqlserver', 'java-mysql', 'node-postgres', 'python-postgres']);
+    const root = join(mkdtempSync(join(tmpdir(), 'reneplane-init-')), 'notes');
+    initCodebank(root, 'Notes', ['node-postgres', 'java-mysql']);
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+    execFileSync('git', ['-c', 'core.autocrlf=false', 'add', '-A'], { cwd: root });
+    execFileSync('git', ['-c', 'core.autocrlf=false', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'Initial import'], { cwd: root });
+
+    const codebank = loadCodebank(root);
+    expect(Object.keys(codebank.spec.stacks)).toEqual(['node-postgres', 'java-mysql']);
+    // The example problem keeps only the chosen stacks, and the file stays valid YAML after them
+    expect(Object.keys(codebank.problems[0]!.spec.stacks)).toEqual(['node-postgres', 'java-mysql']);
+    expect(codebank.problems[0]!.spec.hidden).toBe('hidden/behaviours.mjs');
+
+    const report = await checkCodebank({ root, level: 'quick', gitFor });
+    expect(report.results.filter((result) => result.status === 'fail')).toEqual([]);
+  });
+});
