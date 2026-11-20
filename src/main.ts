@@ -272,13 +272,13 @@ async function main(): Promise<void> {
     case 'codebank': {
       // Authoring tools: loaded only when used, so the agent itself starts as fast as before
       const { codebankCommand } = await import('./codebank/cli.js');
-      process.exitCode = await codebankCommand(rest);
+      exitWhenFlushed(await codebankCommand(rest));
       return;
     }
 
     case 'problem': {
       const { problemCommand } = await import('./codebank/cli.js');
-      process.exitCode = await problemCommand(rest);
+      exitWhenFlushed(await problemCommand(rest));
       return;
     }
 
@@ -291,6 +291,15 @@ async function main(): Promise<void> {
       console.error(`Unknown command "${command}". Commands: start, serve, stop, status, setup, pair, doctor, packs, add, remove, codebank, problem, config, uninstall, version`);
       process.exitCode = 2;
   }
+}
+
+/**
+ * One-shot commands that boot products (codebank check) end here, whatever is still open: a process
+ * a stack left behind must never keep a CI job waiting. Output is flushed first.
+ */
+function exitWhenFlushed(code: number): void {
+  process.exitCode = code;
+  process.stdout.write('', () => process.stderr.write('', () => process.exit(code)));
 }
 
 main().catch((error: Error) => {
