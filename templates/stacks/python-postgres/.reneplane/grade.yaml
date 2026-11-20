@@ -1,0 +1,47 @@
+# How the grader builds and runs this stack (never shipped to learners). "prepare" runs on the pristine
+# starter with internet; everything after the learner's patch runs without it.
+images:
+  backend: python:3.12-slim-bookworm
+  frontend: node:22.23.5-bookworm-slim
+tools:
+  - uv
+env:
+  UV_PYTHON_DOWNLOADS: never
+  UV_PYTHON_PREFERENCE: only-system
+  UV_CACHE_DIR: /cache/uv
+  UV_LINK_MODE: copy
+prepare:
+  - name: Installing backend dependencies
+    image: backend
+    cwd: backend
+    run: /tools/uv sync --frozen
+  - name: Installing frontend dependencies
+    image: frontend
+    cwd: frontend
+    run: npm ci --no-audit --no-fund --loglevel=error
+  - name: Applying the existing migrations
+    image: backend
+    cwd: backend
+    run: /tools/uv run --frozen alembic upgrade head
+build:
+  - name: Building the frontend
+    image: frontend
+    cwd: frontend
+    run: npx vite build --logLevel warn
+migrate:
+  image: backend
+  cwd: backend
+  run: /tools/uv run --frozen --offline alembic upgrade head
+  applied: Running upgrade .*?-> ([^,\s]+)
+services:
+  backend:
+    image: backend
+    cwd: backend
+    run: /tools/uv run --frozen --offline uvicorn app.main:app --host 127.0.0.1
+      --port 8000
+    ready: http://127.0.0.1:8000/api/health
+  frontend:
+    image: frontend
+    cwd: frontend
+    run: npx vite preview --port 5173 --strictPort
+    ready: http://127.0.0.1:5173/

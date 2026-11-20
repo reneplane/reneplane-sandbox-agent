@@ -1,0 +1,6 @@
+<Project>
+  <!-- Locked dependencies: restores are the same everywhere, and the shared NuGet cache is reused -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+</Project>

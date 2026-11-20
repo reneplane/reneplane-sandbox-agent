@@ -47,11 +47,13 @@ export function initCodebank(target: string, name: string, stacks: string[]): vo
   const problemFile = join(target, 'problems', 'NOTE-1', 'problem.yaml');
   if (existsSync(problemFile)) {
     const text = readFileSync(problemFile, 'utf8');
+    // Keep the chosen stacks' entries; the block must still end with a line break before the next key
     const kept = text.replace(/^stacks:\n([\s\S]*?)(?=^\S)/m, (block) =>
-      block
+      `${block
+        .replace(/\n+$/, '')
         .split(/\n(?=  \S)/)
         .filter((entry, index) => index === 0 || stacks.some((stack) => entry.trimStart().startsWith(`${stack}:`)))
-        .join('\n'),
+        .join('\n')}\n`,
     );
     writeFileSync(problemFile, kept);
   }

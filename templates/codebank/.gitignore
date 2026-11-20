@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+.pytest_cache/
+target/
+bin/
+obj/
+.reneplane-out/
+*.log
+.env
+reneplane-report.json

@@ -1,0 +1,18 @@
+{
+  "comment": "Notes development data: the same rows on every stack and engine. Times are relative to when the database is built.",
+  "tables": [
+    {
+      "name": "notes",
+      "identity": true,
+      "columns": ["id", "title", "body", "pinned", "created_at"],
+      "rows": [
+        [1, "Welcome to Notes", "A tiny product to start a codebank from. Replace it with yours.", false, { "$ago": "30 days" }],
+        [2, "Release checklist", "Tag the codebank, then publish the verified version in the admin portal.", true, { "$ago": "12 days" }],
+        [3, "Ideas", "One problem is one squashed commit with a Reneplane-Problem trailer.", false, { "$ago": "6 days" }],
+        [4, "Groceries", "Milk, bread, coffee.", false, { "$ago": "3 days" }],
+        [5, "On-call this week", "Check the alerts on the Operations page every morning.", true, { "$ago": "2 days" }],
+        [6, "Standup notes", "Nothing blocking.", false, { "$ago": "5 hours" }]
+      ]
+    }
+  ]
+}

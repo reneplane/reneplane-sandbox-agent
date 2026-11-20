@@ -8,7 +8,9 @@ A codebank is one private repository per product. Its `main` branch is the healt
 
 Learners get the starter; `main` is the reference.
 
-Codebanks live in the `reneplane` GitHub organisation, named `codebank-<id>`. Locally they sit in `reneplane_project/codebanks/`. `reneplane-local codebank check` enforces everything on this page.
+Codebanks live in the `reneplane` GitHub organisation, named `codebank-<id>`. Locally they sit in `C:deveneplanecodebanks`. `reneplane-local codebank check` enforces everything on this page.
+
+**Starting one.** `reneplane-local codebank init <dir> --name <Name> --stack <id>…` copies the Notes template (`templates/` in this repository): a tiny notes list with pinning, on each stack you pick, and an example problem (NOTE-1). It passes `codebank check --full` from its first commit (CI proves it on every change to the templates). Replace Notes with your product and keep the structure. Stacks with templates: `node-postgres`, `python-postgres`, `java-mysql`, `dotnet-sqlserver`; others follow [ADDING-A-STACK.md](ADDING-A-STACK.md).
 
 ## Layout
 
@@ -154,7 +156,7 @@ The grader runs them when a release is compiled: the starter must fail and the r
 ## Commands
 
 ```sh
-reneplane-local codebank init my-product --name "My Product" --stack node-postgres --stack python-postgres
+reneplane-local codebank init my-product --name "My Product" --stack node-postgres --stack python-postgres   # then git init, commit
 reneplane-local codebank check --quick          # structure only (seconds)
 reneplane-local codebank check                  # + every stack boots, + every problem's starter and reference
 reneplane-local codebank check --stack java-mysql --problem SHOP-142 --keep   # one pair, keep the work folder
