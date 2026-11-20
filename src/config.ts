@@ -10,7 +10,10 @@ import { join } from 'node:path';
  *     bin/          the agent itself (node, agent.mjs, node-pty, git)
  *     runtimes/     Node, Postgres, … downloaded on first use
  *     cache/        npm / uv / Maven / NuGet caches shared by every mission
- *     missions/     one folder per attempt: repo/ (the learner's files), db/, state.json
+ *     sessions/     the open attempt (and any whose last save hasn't reached Reneplane yet)
+ *     state/        tool state packs need (npm's prefix, the .NET CLI home, Maven's wrapper)
+ *     legacy/       work from Reneplane Local 0.2's mission folders, kept as patches
+ *     missions/     Reneplane Local 0.2's per-attempt folders (exported to legacy/, then removed)
  *     logs/
  *     config.json   this file: pairing, devices, settings (readable only by this user)
  *
@@ -31,6 +34,9 @@ export const PATHS = {
   /** Tool state a pack needs and the cache cap must never evict (npm's prefix, the .NET CLI home, Maven's wrapper) */
   state: join(HOME, 'state'),
   missions: join(HOME, 'missions'),
+  /** One folder per open session: deleted when it closes and its work is saved on Reneplane */
+  sessions: join(HOME, 'sessions'),
+  legacy: join(HOME, 'legacy'),
   logs: join(HOME, 'logs'),
   config: join(HOME, 'config.json'),
   /** The agent's own git calls read this instead of the learner's ~/.gitconfig */
@@ -65,6 +71,12 @@ export interface AgentConfig {
   pendingRedeem: { token: string; getUrl: string } | null;
   /** Start at login (default) or only when asked */
   startAtLogin: boolean;
+  /** The shared package cache's limit (npm, uv, Maven, NuGet), in GB */
+  cacheCapGB: number;
+  /** Packs the install command asked for, still to download (the agent does it in the background) */
+  pendingPacks: string[];
+  /** When 0.2's mission folders were exported to legacy/ and removed */
+  legacyExportedAt: string | null;
 }
 
 function defaults(): AgentConfig {
@@ -76,11 +88,14 @@ function defaults(): AgentConfig {
     deviceToken: null,
     pendingRedeem: null,
     startAtLogin: true,
+    cacheCapGB: 3,
+    pendingPacks: [],
+    legacyExportedAt: null,
   };
 }
 
 export function ensureDirs(): void {
-  for (const dir of [PATHS.home, PATHS.bin, PATHS.runtimes, PATHS.downloads, PATHS.cache, PATHS.missions, PATHS.logs]) {
+  for (const dir of [PATHS.home, PATHS.bin, PATHS.runtimes, PATHS.downloads, PATHS.cache, PATHS.sessions, PATHS.logs]) {
     mkdirSync(dir, { recursive: true });
   }
 }

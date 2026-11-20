@@ -21,3 +21,21 @@ describe('runCommand', () => {
     expect(result.output.map((line) => line.trim())).toContain('hello');
   });
 });
+
+describe('isPortFree', () => {
+  // Vite on "localhost" binds only ::1 on Windows: such a port must not be handed to a mission
+  it('counts a port taken only on ::1 as taken', async () => {
+    const { createServer } = await import('node:net');
+    const { isPortFree } = await import('../src/util/ports.js');
+    const server = createServer();
+    const listening = await new Promise<boolean>((resolve) => {
+      server.once('error', () => resolve(false));
+      server.listen(0, '::1', () => resolve(true));
+    });
+    if (!listening) return; // no IPv6 loopback here: nothing to check
+    const { port } = server.address() as { port: number };
+    expect(await isPortFree(port)).toBe(false);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    expect(await isPortFree(port)).toBe(true);
+  });
+});

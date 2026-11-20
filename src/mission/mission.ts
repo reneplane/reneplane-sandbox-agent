@@ -26,6 +26,7 @@ import { Debugger, type DebugCommand } from '../debug/session.js';
 import { MissionFiles } from './files.js';
 import { Git } from './git.js';
 import { Services } from './services.js';
+import { publicUrl } from '../cloud.js';
 import type { MissionSource } from './source.js';
 import { Terminals } from './terminal.js';
 import { runTests } from './tests.js';
@@ -74,6 +75,10 @@ export interface MissionOptions {
   watchFiles?: boolean;
   /** Where SQL Server comes from: the Azure pool (learners) or Docker Express (codebank checks, dev) */
   mssql?: 'pool' | 'docker';
+  /** How a learner's browser reaches a port (cloud agents serve previews on public URLs) */
+  previewUrl?: string;
+  /** What the SQL Server pool is shown: this computer's device token, or (cloud) the session token */
+  leaseToken?: () => string | null;
 }
 
 export class Mission {
@@ -96,6 +101,8 @@ export class Mission {
   private debuggerInstance: Debugger | null = null;
   /** An IDE tab is connected to this mission (kept up to date by the manager; sent with lease heartbeats) */
   watched = true;
+  private readonly changeListeners: (() => void)[] = [];
+  private readonly bootedListeners: (() => void)[] = [];
 
   constructor(
     identity: MissionIdentity,
@@ -114,6 +121,21 @@ export class Mission {
       (services) => this.emit('services.change', services),
       (entry) => this.log(entry),
     );
+  }
+
+  /** Called whenever a file in the working tree changes (autosave listens) */
+  onChange(listener: () => void): void {
+    this.changeListeners.push(listener);
+  }
+
+  /** Called each time the mission finishes booting */
+  onBooted(listener: () => void): void {
+    this.bootedListeners.push(listener);
+  }
+
+  /** The working tree exists (even when nothing is running) */
+  get hasFiles(): boolean {
+    return existsSync(join(this.repoDir, '.git'));
   }
 
   /** Its programs are running (not stopped for idleness) */
@@ -164,7 +186,7 @@ export class Mission {
     if (this.needsRestore()) steps.push({ id: 'restore', label: 'Restoring your saved work' });
     for (const name of ['backend', 'frontend'] as const) {
       const service = workspace.services[name];
-      if (service) steps.push({ id: `service:${name}`, label: `Starting the ${name}`, detail: `${service.label} on localhost:${this.ports[name]}` });
+      if (service) steps.push({ id: `service:${name}`, label: `Starting the ${name}`, detail: `${service.label} on ${this.address(this.ports[name]!)}` });
     }
     this.steps = steps;
 
@@ -172,7 +194,7 @@ export class Mission {
     return {
       repo: { name: workspace.name, branch: workspace.branch },
       bootSteps: steps,
-      preview: preview && this.ports[preview.service] ? { url: `http://localhost:${this.ports[preview.service]}${preview.path}` } : null,
+      preview: preview && this.ports[preview.service] ? { url: `${this.urlOf(this.ports[preview.service]!)}${preview.path}` } : null,
       database: { engine: workspace.database.engine, location: workspace.database.engine === 'sqlserver' ? 'remote' : 'local', label: this.databaseLabel() },
       debug: workspace.debug && workspace.services.backend ? { adapter: workspace.debug.adapter } : null,
     };
@@ -236,6 +258,7 @@ export class Mission {
       }
       this.booted = true;
       log.info(`Mission ${this.attemptId} is running`);
+      for (const listener of this.bootedListeners) listener();
     } catch (error) {
       log.error(`Mission ${this.attemptId} failed to start`, error);
       await this.suspend().catch(() => undefined);
@@ -341,7 +364,7 @@ export class Mission {
   private async startService(name: 'frontend' | 'backend'): Promise<void> {
     const service = this.workspace!.services[name]!;
     const port = this.ports[name]!;
-    this.services.declare(name, service.label, `localhost:${port}`, 'starting');
+    this.services.declare(name, service.label, this.address(port), 'starting');
     const vars = this.vars();
     await this.services.start(
       name,
@@ -363,13 +386,22 @@ export class Mission {
       }
       return new RemoteMssql(
         process.env.RENEPLANE_POOL_URL ?? 'https://reneplane-mssql-pool.reneplane.workers.dev',
-        () => loadConfig().deviceToken,
+        this.options.leaseToken ?? (() => loadConfig().deviceToken),
         // How the pool finds the template it loads: a codebank path (0.2) or the engine's signed reference
         { ...this.identity, ...this.source.leaseTemplate(templatePath) },
         () => this.watched,
       );
     }
     throw new AgentError('database_unavailable', `${engine} isn't supported by this version of Reneplane Local yet`);
+  }
+
+  /** http://localhost:5173 here; a public URL from a cloud agent */
+  private urlOf(port: number): string {
+    return publicUrl(this.options.previewUrl ?? 'http://localhost:{port}', port);
+  }
+
+  private address(port: number): string {
+    return new URL(this.urlOf(port)).host;
   }
 
   private mssqlMode(): 'pool' | 'docker' {
@@ -478,6 +510,7 @@ export class Mission {
 
   /** Restart a service whose sources changed, if it can't reload by itself (restartOn in workspace.yaml) */
   private onFileChanged(path: string): void {
+    for (const listener of this.changeListeners) listener();
     if (!this.booted || !this.workspace) return;
     // While debugging, the debugger owns the backend (and restarts its debug run itself)
     const debugging = this.debuggerInstance?.active ?? false;
@@ -625,7 +658,13 @@ export class Mission {
     if (commit) this.emit('git.change', {});
     return commit;
   }
+  /** The learner's changes against the starter: what's submitted and autosaved (works before booting) */
   async gitDiff() {
+    if (!this.git && this.hasFiles) {
+      const git = await ensureRuntime('git');
+      this.runtimes.set('git', git);
+      this.git = new Git(git, this.repoDir);
+    }
     return this.requireGit().diffSince(this.source.baseRef);
   }
   private requireGit(): Git {
@@ -685,6 +724,12 @@ export class Mission {
     await this.services.stopAll();
     await this.db?.stop().catch((error) => log.warn('Database stop failed', error));
     this.services.setState('database', 'stopped');
+  }
+
+  /** Delete the database only (a session that closed offline keeps its files, not its data) */
+  async destroyDatabase(): Promise<void> {
+    await this.db?.destroy().catch((error) => log.warn('Database cleanup failed', error));
+    this.db = null;
   }
 
   /**

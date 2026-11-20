@@ -1,12 +1,23 @@
 import { createServer } from 'node:net';
 
 /** True if nothing is listening on 127.0.0.1:<port> */
-export function isPortFree(port: number): Promise<boolean> {
+/**
+ * Free on both loopbacks. Dev servers bind 127.0.0.1, ::1 or both, and "localhost" resolves to ::1
+ * first on Windows and recent macOS: a port taken only on ::1 (another Vite) looked free, and the
+ * mission's preview at localhost:<port> showed that other app.
+ */
+export async function isPortFree(port: number): Promise<boolean> {
+  for (const host of ['127.0.0.1', '::1']) if ((await freeOn(port, host)) === false) return false;
+  return true;
+}
+
+/** null: this computer has no such address (no IPv6), so nothing can be using the port there */
+function freeOn(port: number, host: string): Promise<boolean | null> {
   return new Promise((resolve) => {
     const server = createServer();
-    server.once('error', () => resolve(false));
+    server.once('error', (error: NodeJS.ErrnoException) => resolve(error.code === 'EADDRNOTAVAIL' || error.code === 'EAFNOSUPPORT' ? null : false));
     server.once('listening', () => server.close(() => resolve(true)));
-    server.listen(port, '127.0.0.1');
+    server.listen(port, host);
   });
 }
 

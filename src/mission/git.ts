@@ -227,3 +227,10 @@ function isolatedGitEnv(): Env {
     LC_ALL: 'C',
   };
 }
+
+/** The agent's git for a folder: the bundled one, or the system git when RENEPLANE_SYSTEM_GIT=1 (tests, CI tools) */
+export async function agentGit(cwd: string): Promise<Git> {
+  if (process.env.RENEPLANE_SYSTEM_GIT === '1') return Git.system(cwd);
+  const { ensureRuntime } = await import('../runtimes/index.js');
+  return new Git(await ensureRuntime('git'), cwd);
+}

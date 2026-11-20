@@ -1,7 +1,6 @@
 import { existsSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
-import { Git } from '../mission/git.js';
-import { ensureRuntime } from '../runtimes/index.js';
+import { agentGit, type Git } from '../mission/git.js';
 
 /**
  * Git questions about the codebank itself (the author's checkout). The tooling reads the working tree,
@@ -10,8 +9,7 @@ import { ensureRuntime } from '../runtimes/index.js';
 
 /** The bundled git, like everything else the agent runs; tests use the system git */
 export async function gitFor(cwd: string): Promise<Git> {
-  if (process.env.RENEPLANE_SYSTEM_GIT === '1') return Git.system(cwd);
-  return new Git(await ensureRuntime('git'), cwd);
+  return agentGit(cwd);
 }
 
 export interface CodebankFile {

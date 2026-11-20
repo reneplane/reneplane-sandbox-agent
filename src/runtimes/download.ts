@@ -20,8 +20,10 @@ export async function downloadVerified(url: string, checksum: Checksum, destinat
     try {
       return await downloadOnce(url, checksum, destination, onProgress);
     } catch (error) {
-      if (attempt >= 4 || /Checksum mismatch|Download failed \(4\d\d\)/.test((error as Error).message)) throw error;
-      onProgress?.(`Connection problem, retrying (${attempt} of 3)`);
+      // Every URL is pinned and checksummed, so even a 404 is most likely the mirror's CDN having a
+      // moment (Maven Central did, 2026-11-20): retry everything but a bad checksum
+      if (attempt >= 4 || /Checksum mismatch/.test((error as Error).message)) throw error;
+      onProgress?.(`Download problem, retrying (${attempt} of 3)`);
       await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
     }
   }

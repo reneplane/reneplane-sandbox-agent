@@ -6,12 +6,17 @@ import { loadConfig, PATHS, updateConfig } from './config.js';
 import { runDoctor } from './doctor.js';
 import { launchScript, managedByService, redeemDevice, setup, startManaged, unregisterAutostart } from './install.js';
 import { createLogger, logToConsole } from './log.js';
-import { addPendingPairing } from './pairing.js';
+import { addPendingPairing, isWellFormedToken } from './pairing.js';
 import { STATUS_FILE, startServer } from './server.js';
 import { downloadUpdate, pruneOldVersions, RESTART_EXIT_CODE, switchTo } from './update.js';
 import { AGENT_VERSION } from './version.js';
-import { addPack, isPackId, listPacks, PACK_IDS, removePack, type PackId } from './packs/index.js';
+import { addPack, isPackId, listPacks, PACK_IDS, packState, removePack, type PackId } from './packs/index.js';
+import { clearCache, enforceCap } from './cache.js';
+import { exportLegacyMissions } from './legacy.js';
+import { keepAsPatch, removeSession, sessionsOnDisk, sweepSessions } from './session/store.js';
+import { dirSize } from './util/disk.js';
 import { pruneRuntimes } from './runtimes/index.js';
+import { cloudConfig } from './cloud.js';
 import { formatBytes } from './util/disk.js';
 
 /**
@@ -26,12 +31,16 @@ import { formatBytes } from './util/disk.js';
  *   packs              the stack packs and what they use on disk
  *   add <pack…>        install stack packs (e.g. add jdk21-maven mysql84)
  *   remove <pack>      delete a stack pack
+ *   clean [--all] [--force]   free disk: caches, old runtimes, closed sessions (--all: packs too;
+ *                      --force: sessions still waiting to be saved, kept as patches in legacy/)
+ *   update             download the latest version now (it also updates itself)
  *   codebank check|compile|init     authoring tools (see src/codebank/cli.ts)
  *   problem new <ID> --from-commit <sha>
  *   config set <key> <value>
  *   uninstall [--all]  remove start-at-login and the agent (--all: also runtimes and missions)
  *
- * Options for serve: --dev (also accept http://localhost:5175), --codebanks <dir> (dev: clone codebanks from <dir>)
+ * Options for serve: --dev (also accept http://localhost:5175), --codebanks <dir> (dev: clone codebanks from <dir>),
+ *   --cloud (a cloud agent: see src/cloud.ts for its environment variables)
  */
 
 const log = createLogger('main');
@@ -81,7 +90,9 @@ async function serve(): Promise<void> {
   pruneOldVersions();
   // Before any mission runs: what earlier versions downloaded and no longer need
   pruneRuntimes();
-  const running = await startServer({ dev: flag('dev'), codebankDir: option('codebanks'), onStopRequested: () => void shutdown(0) });
+  // Cloud mode (src/cloud.ts): same agent, in a container; it ends with its session
+  const cloud = cloudConfig(flag('cloud'));
+  const running = await startServer({ dev: flag('dev'), codebankDir: option('codebanks'), cloud, onStopRequested: () => void shutdown(0), onSessionEnded: cloud ? () => void shutdown(0) : undefined });
   let stopping = false;
   async function shutdown(code: number) {
     if (stopping) return;
@@ -92,6 +103,21 @@ async function serve(): Promise<void> {
   }
   process.on('SIGINT', () => void shutdown(0));
   process.on('SIGTERM', () => void shutdown(0));
+
+  if (cloud) {
+    log.info(`Cloud mode: listening on ${cloud.host}:${cloud.port}, previews at ${cloud.previewUrl}`);
+    return;
+  }
+
+  // 0.2's mission folders: the first time, all of them (as patches in legacy/); then old ones only
+  const config = loadConfig();
+  void exportLegacyMissions({ all: !config.legacyExportedAt, active: null }).then(() => {
+    if (!config.legacyExportedAt) updateConfig((next) => void (next.legacyExportedAt = new Date().toISOString()));
+  });
+  // Packs the install command asked for: downloaded now, with progress in any open IDE
+  void installPendingPacks(running);
+  // The cache cap, daily (and after every session)
+  setInterval(() => enforceCap(running.activeAttempt() !== null), 24 * 3600_000).unref();
 
   // Finish registering this computer if the install couldn't reach get.reneplane.com
   const pending = loadConfig().pendingRedeem;
@@ -112,6 +138,22 @@ async function serve(): Promise<void> {
   if (!flag('dev')) {
     setTimeout(() => void checkForUpdate(), 3 * 60_000);
     setInterval(() => void checkForUpdate(), 6 * 60 * 60_000);
+  }
+}
+
+async function installPendingPacks(running: Awaited<ReturnType<typeof startServer>>): Promise<void> {
+  for (const id of loadConfig().pendingPacks.filter(isPackId)) {
+    try {
+      if (packState(id) === 'missing') {
+        await addPack(id, (detail) => running.broadcast('packs.progress', { id, detail }));
+        running.broadcast('packs.progress', { id, done: true });
+      }
+    } catch (error) {
+      log.warn(`Pack ${id} didn't install`, (error as Error).message);
+      running.broadcast('packs.progress', { id, error: (error as Error).message });
+      continue;
+    }
+    updateConfig((config) => void (config.pendingPacks = config.pendingPacks.filter((pack) => pack !== id)));
   }
 }
 
@@ -148,6 +190,9 @@ async function main(): Promise<void> {
       const token = option('token');
       const getUrl = option('get') ?? 'https://get.reneplane.com';
       if (!token) throw new Error('setup needs --token');
+      // The install command's &packs=: the agent downloads them in the background once it runs
+      const packs = (option('packs') ?? '').split(',').filter(isPackId);
+      if (packs.length) updateConfig((config) => void (config.pendingPacks = [...new Set([...config.pendingPacks, ...packs])]));
       await setup({ token, getUrl });
       // A running older version stops; the new one starts
       if (await control('stop')) await waitUntilStopped();
@@ -172,6 +217,11 @@ async function main(): Promise<void> {
 
     case 'pair': {
       const token = rest[0] ?? '';
+      if (!isWellFormedToken(token)) {
+        console.error('That pairing token is not valid. Copy the whole command from the workspace tab again.');
+        process.exitCode = 2;
+        return;
+      }
       // Prefer telling the running agent; fall back to the config file it reads on every hello
       if (!(await control('pair', { token }))) addPendingPairing(token);
       console.log('Paired. Go back to the workspace tab.');
@@ -197,7 +247,15 @@ async function main(): Promise<void> {
         console.log(`allowPreviewOrigins = ${value}`);
         return;
       }
-      console.error('Usage: reneplane-local config set allowPreviewOrigins true|false');
+      // The download cache's limit, in GB (it's trimmed to this after a mission closes, and daily)
+      if (action === 'set' && key === 'cacheCapGB' && /^\d{1,3}$/.test(value ?? '') && Number(value) >= 1 && Number(value) <= 200) {
+        updateConfig((config) => {
+          config.cacheCapGB = Number(value);
+        });
+        console.log(`cacheCapGB = ${value}`);
+        return;
+      }
+      console.error('Usage: reneplane-local config set allowPreviewOrigins true|false\n       reneplane-local config set cacheCapGB <1-200>');
       process.exitCode = 2;
       return;
     }
@@ -269,6 +327,47 @@ async function main(): Promise<void> {
       return;
     }
 
+    case 'clean': {
+      const status = (await control('status')) as { mission?: string | null } | null;
+      if (status?.mission) {
+        console.error(`A mission is open (${status.mission}). Close it in the workspace first, or stop Reneplane Local.`);
+        process.exitCode = 1;
+        return;
+      }
+      const before = dirSize(PATHS.home);
+      await sweepSessions(null);
+      let kept = 0;
+      for (const session of sessionsOnDisk()) {
+        if (session.unsynced && !flag('force')) {
+          kept += 1;
+          continue;
+        }
+        await keepAsPatch(session.attemptId, 'cleaned with reneplane-local clean');
+        removeSession(session.attemptId);
+      }
+      await exportLegacyMissions({ all: true, active: null });
+      clearCache();
+      pruneRuntimes();
+      if (flag('all')) for (const pack of listPacks()) if (pack.state === 'installed') removePack(pack.id);
+      console.log(`Freed ${formatBytes(Math.max(0, before - dirSize(PATHS.home)))}.${kept ? ` ${kept} session(s) still waiting to save their work were kept (--force keeps them as patches in ${PATHS.legacy} instead).` : ''}`);
+      return;
+    }
+
+    case 'update': {
+      const version = await downloadUpdate();
+      if (!version) {
+        console.log(`Reneplane Local ${AGENT_VERSION} is the latest.`);
+        return;
+      }
+      switchTo(version);
+      if (await control('stop')) {
+        await waitUntilStopped();
+        await startInBackground();
+      }
+      console.log(`Updated to Reneplane Local ${version}.`);
+      return;
+    }
+
     case 'codebank': {
       // Authoring tools: loaded only when used, so the agent itself starts as fast as before
       const { codebankCommand } = await import('./codebank/cli.js');
@@ -288,7 +387,7 @@ async function main(): Promise<void> {
       return;
 
     default:
-      console.error(`Unknown command "${command}". Commands: start, serve, stop, status, setup, pair, doctor, packs, add, remove, codebank, problem, config, uninstall, version`);
+      console.error(`Unknown command "${command}". Commands: start, serve, stop, status, setup, pair, doctor, packs, add, remove, clean, update, codebank, problem, config, uninstall, version`);
       process.exitCode = 2;
   }
 }

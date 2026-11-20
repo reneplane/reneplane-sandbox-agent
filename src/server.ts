@@ -8,23 +8,31 @@ import { runDoctor } from './doctor.js';
 import { createLogger } from './log.js';
 import { MissionManager, type MissionClient } from './mission/manager.js';
 import type { MissionOptions } from './mission/mission.js';
-import { addPendingPairing, authenticate } from './pairing.js';
+import { addPendingPairing, authenticate, isWellFormedToken } from './pairing.js';
+import { cacheUsage } from './cache.js';
+import { addPack, isPackId, listPacks, removePack, type PackId } from './packs/index.js';
+import { sessionsOnDisk } from './session/store.js';
 import {
   AgentError,
   Methods,
   PROTOCOL_VERSION,
   RequestFrame,
+  SUPPORTED_PROTOCOLS,
   type AgentEvent,
   type MethodName,
   type ResponseFrame,
 } from './protocol.js';
 import { isAllowedHost, isAllowedOrigin, randomToken, sameHash, sha256 } from './security.js';
+import { verifySessionToken, type CloudConfig } from './cloud.js';
 import { isPortFree } from './util/ports.js';
 import { AGENT_VERSION } from './version.js';
 
 const log = createLogger('server');
 
 export interface ServerOptions extends MissionOptions {
+  /** Cloud mode (src/cloud.ts): listen publicly, authenticate with the engine's session token */
+  cloud?: CloudConfig | null;
+  onSessionEnded?: () => void;
   /** Called when the CLI asks the agent to stop */
   onStopRequested?: () => void;
 }
@@ -33,6 +41,10 @@ export interface RunningServer {
   port: number;
   /** A mission's programs are running: don't restart under it */
   busy(): boolean;
+  /** The open mission, if any */
+  activeAttempt(): string | null;
+  /** An event to every connected IDE (pack progress) */
+  broadcast(event: AgentEvent, data: unknown): void;
   close(): Promise<void>;
 }
 
@@ -42,22 +54,31 @@ export const STATUS_FILE = () => join(PATHS.home, 'agent.json');
 export async function startServer(options: ServerOptions): Promise<RunningServer> {
   // A brand-new computer has no ~/.reneplane yet
   ensureDirs();
-  const manager = new MissionManager(options);
-  let port = 0;
-  for (const candidate of DEFAULT_PORTS) {
+  const cloud = options.cloud ?? null;
+  const manager = new MissionManager({ ...options, cloud: Boolean(cloud), ...(cloud ? { previewUrl: cloud.previewUrl } : {}) });
+  let port = cloud?.port ?? 0;
+  for (const candidate of cloud ? [] : DEFAULT_PORTS) {
     if (await isPortFree(candidate)) {
       port = candidate;
       break;
     }
   }
   if (!port) throw new Error(`Ports ${DEFAULT_PORTS.join(', ')} are all in use. Is Reneplane Local already running?`);
+  const hostOk = (host: string | undefined) => isAllowedHost(host, port) || (cloud?.publicHost !== null && cloud?.publicHost !== undefined && host === cloud.publicHost);
 
   const policy = () => ({ dev: options.dev, allowPreviewOrigins: loadConfig().allowPreviewOrigins });
-  const server: Server = createServer((request, response) => void handleHttp(request, response));
+  // A request that fails answers 500; it must never take the agent (and the learner's mission) down
+  const server: Server = createServer((request, response) =>
+    void handleHttp(request, response).catch((error: Error) => {
+      log.warn(`HTTP ${request.method} ${request.url} failed`, error.message);
+      if (!response.headersSent) json(response, 500, { error: 'internal error' });
+      else response.end();
+    }),
+  );
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 10 * 1024 * 1024 });
 
   async function handleHttp(request: IncomingMessage, response: ServerResponse) {
-    if (!isAllowedHost(request.headers.host, port)) return deny(response, 'bad host');
+    if (!hostOk(request.headers.host)) return deny(response, 'bad host');
     const url = new URL(request.url ?? '/', `http://127.0.0.1:${port}`);
 
     // The CLI on this computer: proves itself with the control token from config.json (only this user can read it)
@@ -69,10 +90,12 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       const body = await readBody(request);
       if (url.pathname === '/control/status') {
         const mission = manager.current();
-        return json(response, 200, { agent: 'reneplane-local', version: AGENT_VERSION, port, pid: process.pid, mission: mission?.attemptId ?? null, packsInUse: mission?.isRunning ? mission.packs() : [] });
+        return json(response, 200, { agent: 'reneplane-local', version: AGENT_VERSION, port, pid: process.pid, mission: mission?.attemptId ?? null, packsInUse: manager.packsInUse() });
       }
       if (url.pathname === '/control/pair') {
-        addPendingPairing(String((JSON.parse(body || '{}') as { token?: string }).token ?? ''));
+        const token = String((JSON.parse(body || '{}') as { token?: string }).token ?? '');
+        if (!isWellFormedToken(token)) return json(response, 400, { error: 'That pairing token is not valid' });
+        addPendingPairing(token);
         return json(response, 200, { ok: true });
       }
       if (url.pathname === '/control/stop') {
@@ -97,17 +120,18 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
 
   server.on('upgrade', (request, socket, head) => {
     const origin = request.headers.origin;
-    if (!isAllowedHost(request.headers.host, port) || !isAllowedOrigin(origin, policy())) {
+    if (!hostOk(request.headers.host) || !isAllowedOrigin(origin, policy())) {
       log.warn(`Refused a WebSocket from origin ${origin ?? '(none)'} host ${request.headers.host ?? '(none)'}`);
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }
-    sockets.handleUpgrade(request, socket, head, (ws) => new Session(ws, manager, origin!));
+    sockets.handleUpgrade(request, socket, head, (ws) => new Session(ws, manager, origin!, cloud));
   });
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, '127.0.0.1', () => resolve());
+    // On a learner's computer only ever 127.0.0.1; a cloud agent's container is reached from outside
+    server.listen(port, cloud?.host ?? '127.0.0.1', () => resolve());
   });
   writeFileSync(STATUS_FILE(), JSON.stringify({ port, pid: process.pid, version: AGENT_VERSION, startedAt: new Date().toISOString() }));
   log.info(`Reneplane Local ${AGENT_VERSION} listening on 127.0.0.1:${port}${options.dev ? ' (dev: localhost:5175 allowed)' : ''}`);
@@ -115,6 +139,8 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
   return {
     port,
     busy: () => manager.current()?.isRunning ?? false,
+    activeAttempt: () => manager.current()?.attemptId ?? null,
+    broadcast: (event, data) => manager.broadcastAll(event, data),
     close: async () => {
       for (const client of sockets.clients) client.close(1001, 'Agent stopping');
       await manager.shutdown();
@@ -130,11 +156,14 @@ class Session implements MissionClient {
   private authenticated = false;
   private readonly sessionToken = randomToken(24);
   private readonly terminals = new Set<number>();
+  /** Cloud mode: the one attempt this connection's session token allows */
+  private allowedAttempt: string | null = null;
 
   constructor(
     private readonly ws: WebSocket,
     private readonly manager: MissionManager,
     origin: string,
+    private readonly cloud: CloudConfig | null = null,
   ) {
     log.info(`IDE connected from ${origin}`);
     ws.on('message', (data) => void this.onMessage(data.toString()));
@@ -198,11 +227,25 @@ class Session implements MissionClient {
       case 'doctor':
         return runDoctor();
       case 'mission.plan':
+        if (this.allowedAttempt && (params as { attemptId: string }).attemptId !== this.allowedAttempt) throw new AgentError('unauthorized', 'This session is for another attempt');
+        if (this.cloud && !('session' in (params as object))) throw new AgentError('bad_request', 'Cloud agents only open sessions');
         return this.manager.plan(params, this);
       case 'mission.boot':
         return this.mission().boot();
       case 'mission.close':
         return this.manager.close((params as { attemptId: string }).attemptId);
+      case 'packs.list':
+        return packsReport();
+      case 'packs.add':
+        return this.addPacks((params as { ids: string[] }).ids);
+      case 'packs.remove': {
+        const { id } = params as { id: string };
+        if (!isPackId(id)) throw new AgentError('bad_request', `Unknown pack ${id}`);
+        if (this.manager.packsInUse().includes(id)) throw new AgentError('pack_in_use', 'The open mission uses it; close the mission first');
+        removePack(id);
+        forgetReport();
+        return packsReport();
+      }
     }
 
     const mission = this.mission();
@@ -276,9 +319,41 @@ class Session implements MissionClient {
     throw new AgentError('unknown_method', `Unknown method ${method}`);
   }
 
-  private hello(params: { protocol: number; client: string; deviceKey?: string; pairToken?: string }) {
-    if (params.protocol !== 1) {
-      throw new AgentError('bad_request', 'This version of Reneplane Local is out of date. It updates itself shortly, or run: reneplane-local update');
+  /** Add packs one after another; every connected IDE sees the progress (its badges turn amber, then green) */
+  private async addPacks(ids: string[]) {
+    const unknown = ids.filter((id) => !isPackId(id));
+    if (unknown.length) throw new AgentError('bad_request', `Unknown packs: ${unknown.join(', ')}`);
+    for (const id of ids as PackId[]) {
+      try {
+        await addPack(id, (detail) => this.manager.broadcastAll('packs.progress', { id, detail }));
+        this.manager.broadcastAll('packs.progress', { id, done: true });
+      } catch (error) {
+        this.manager.broadcastAll('packs.progress', { id, error: (error as Error).message });
+        throw error;
+      } finally {
+        forgetReport();
+      }
+    }
+    return packsReport();
+  }
+
+  private hello(params: { protocol: number; client: string; deviceKey?: string; pairToken?: string; sessionToken?: string }) {
+    if (!SUPPORTED_PROTOCOLS.includes(params.protocol)) {
+      throw new AgentError(
+        'outdated',
+        params.protocol > PROTOCOL_VERSION
+          ? 'This version of Reneplane Local is older than the workspace. Run: reneplane-local update (or the install command again)'
+          : 'The workspace page is older than Reneplane Local; reload it',
+      );
+    }
+    if (this.cloud) {
+      // No pairing in the cloud: the engine signed this session for one attempt
+      const session = verifySessionToken(params.sessionToken, this.cloud.sessionSecret);
+      if (!session) throw new AgentError('unauthorized', 'This session token is not valid (or has expired); reopen the mission');
+      this.allowedAttempt = session.attemptId;
+      this.authenticated = true;
+      this.manager.attach(this);
+      return { agentVersion: AGENT_VERSION, protocol: PROTOCOL_VERSION, platform: process.platform, arch: process.arch, sessionToken: this.sessionToken, mode: 'cloud' };
     }
     const { deviceKey, newlyPaired } = authenticate({ deviceKey: params.deviceKey, pairToken: params.pairToken });
     this.authenticated = true;
@@ -290,6 +365,7 @@ class Session implements MissionClient {
       arch: process.arch,
       sessionToken: this.sessionToken,
       deviceKey: newlyPaired ? deviceKey : undefined,
+      mode: 'local',
     };
   }
 
@@ -322,4 +398,18 @@ function readBody(request: IncomingMessage): Promise<string> {
     });
     request.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
   });
+}
+
+// ---- packs and disk use ------------------------------------------------------------------------------
+
+let report: { at: number; value: unknown } | null = null;
+
+/** Packs, the cache and session folders, with sizes; walking folders takes a moment, so it's kept a minute */
+function packsReport(): unknown {
+  if (!report || Date.now() - report.at > 60_000) report = { at: Date.now(), value: { packs: listPacks(), cache: cacheUsage(), sessions: sessionsOnDisk() } };
+  return report.value;
+}
+
+function forgetReport(): void {
+  report = null;
 }

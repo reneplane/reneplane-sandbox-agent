@@ -14,6 +14,11 @@ ALLOWED_ORIGINS = "https://workspace.reneplane.com,http://localhost:5175"
 binding = "TOKENS"
 id = "705b769246684a59a1282b11b9415513"
 
+# Registered computers and revocations: shared with the engine, the SQL Server pool and the grader
+[[kv_namespaces]]
+binding = "DEVICES"
+id = "3d5cac2694f54d759d26372f26c275d8"
+
 # 30 requests a minute per IP across install-token, script and device endpoints
 [[ratelimits]]
 name = "INSTALL_LIMIT"
